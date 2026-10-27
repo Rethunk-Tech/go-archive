@@ -59,6 +59,27 @@ Two decompression bounds are not policy and cannot be lowered away: the decoder
 window (`maxDecoderBytes`) is set where the decoder is built, and a stream's
 aggregate budget stops a bomb the per-entry bound would let through spread thin.
 
+## Files
+
+One package, split by concern rather than by type:
+
+| File | Holds |
+| --- | --- |
+| `archive.go` | the package doc, the cap constants and `Options`, `Source`, `Extract` |
+| `walk.go` | `walk` and the per-format enumerators, and each format's entry-mode mapping |
+| `extract.go` | the `extractor`: name admission, case collisions, writing, byte caps |
+| `stream.go` | streaming-format detection, the decoder window, and the stream budget |
+| `detect.go` | the format identifiers and magic-byte detection |
+| `sevenzip_limits.go` | the 7z header walk, which runs before the reader sees the archive |
+| `lister.go`, `names.go`, `size.go`, `recover.go` | one export each; see their doc comments |
+
+A second package is not warranted and should not be proposed. `walk` hands each
+entry over as `item`, `walkFunc` and `walkLimits`, and `Lister` drives that same
+walk through an iterator. Splitting would have to export those three types and
+the budget rule to keep one enumerator serving both entry points, which is a
+larger surface than the unexported one it replaces. The tests are in-package for
+the same reason.
+
 ## Comments
 
 Say why, not history. No "previously", no ticket or finding IDs, no benchmark
