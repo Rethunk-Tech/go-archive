@@ -73,7 +73,9 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 	}
 	l := &Lister{src: src, size: size, baseName: baseName, opts: opts}
 	l.steps, l.stop = iter.Pull2(func(yield func(walkStep, error) bool) {
-		err := walk(l.src, l.size, l.baseName, l.opts.budget(), func(it item, open func() (io.ReadCloser, error)) error {
+		// A listing has no entry cap: counting is the caller's policy.
+		limits := walkLimits{budget: l.opts.budget()}
+		err := walk(l.src, l.size, l.baseName, limits, func(it item, open func() (io.ReadCloser, error)) error {
 			if !yield(walkStep{item: it, open: open}, nil) {
 				return errWalkStop
 			}

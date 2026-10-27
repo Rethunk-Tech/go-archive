@@ -131,8 +131,12 @@ func extract(src Source, size int64, baseName string, dest *os.Root, opts Option
 
 	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
 	x.ratioMax = x.opts.ratioCap(size)
-	budget := streamBudget(x.opts.MaxTotalBytes, x.opts.MaxEntries)
-	return walk(src, size, baseName, budget, x.admitEntry)
+	return walk(src, size, baseName, walkLimits{
+		budget: streamBudget(x.opts.MaxTotalBytes, x.opts.MaxEntries),
+		// The declared count is refused up front where a container can report
+		// it; admit counts the rest as they are written.
+		maxEntries: x.opts.MaxEntries,
+	}, x.admitEntry)
 }
 
 const (
@@ -176,12 +180,24 @@ type item struct {
 	encrypted bool
 	linkType  int
 	crc       *uint32
+	// skip marks an entry that names no file of its own, so neither entry point
+	// reports it.
+	skip bool
 }
 
 // walkFunc receives one entry and a reader for its bytes. The reader is valid
 // until walkFunc returns, so a caller that leaves it unread lets the decoder
 // skip those bytes.
 type walkFunc func(it item, open func() (io.ReadCloser, error)) error
+
+// walkLimits are the two bounds the walk itself enforces. budget is what a
+// stream may decompress; maxEntries, when non-zero, refuses a container that
+// declares more entries than that before any is read, which zip and 7z can do
+// and the streaming formats cannot.
+type walkLimits struct {
+	budget     int64
+	maxEntries int
+}
 
 // errWalkStop ends a walk with no error, for a caller that already has what it
 // asked for; walk itself never returns it.
@@ -192,11 +208,11 @@ var errWalkStop = errors.New("walk stopped")
 // what an archive holds; only their read budgets differ. budget is the payload
 // a stream may decompress, which has to be set where the decoder is built
 // rather than on what comes out of it.
-func walk(src Source, size int64, baseName string, budget int64, fn walkFunc) error {
+func walk(src Source, size int64, baseName string, limits walkLimits, fn walkFunc) error {
 	kind := detectSource(src)
 	switch kind {
 	case fmtZip:
-		return walkZip(src, size, fn)
+		return walkZip(src, size, limits, fn)
 	case fmtRAR:
 		start, err := src.Seek(0, io.SeekStart)
 		if err != nil {
@@ -204,23 +220,31 @@ func walk(src Source, size int64, baseName string, budget int64, fn walkFunc) er
 		}
 		return walkRAR(io.NewSectionReader(src, start, size-start), fn)
 	case fmtSevenZip:
-		return walkSevenZip(src, size, fn)
+		return walkSevenZip(src, size, limits, fn)
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
 		start, err := src.Seek(0, io.SeekStart)
 		if err != nil {
 			return err
 		}
-		return walkStream(io.NewSectionReader(src, start, size-start), kind, baseName, budget, fn)
+		return walkStream(io.NewSectionReader(src, start, size-start), kind, baseName, limits.budget, fn)
 	}
 	return &Error{Reason: ErrUnsupportedFormat}
 }
 
-func walkZip(src io.ReaderAt, size int64, fn walkFunc) error {
+// tooMany reports whether a container declaring n entries exceeds the cap.
+func (w walkLimits) tooMany(n int) bool {
+	return w.maxEntries > 0 && n > w.maxEntries
+}
+
+func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {
 	zr, err := zip.NewReader(src, size)
 	// The path check below is stricter than the reader's own, so a reader that
 	// came back anyway is still worth walking.
 	if err != nil && (zr == nil || !errors.Is(err, zip.ErrInsecurePath)) {
 		return wrap("", err)
+	}
+	if limits.tooMany(len(zr.File)) {
+		return &Error{Reason: ErrTooManyEntries}
 	}
 	for _, f := range zr.File {
 		mode := f.Mode()
@@ -237,13 +261,16 @@ func walkZip(src io.ReaderAt, size int64, fn walkFunc) error {
 	return nil
 }
 
-func walkSevenZip(src io.ReaderAt, size int64, fn walkFunc) error {
+func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {
 	if err := checkSevenZipLimits(src, size); err != nil {
 		return wrap("", err)
 	}
 	zr, err := openSevenZip(src, size)
 	if err != nil {
 		return wrap("", err)
+	}
+	if limits.tooMany(len(zr.File)) {
+		return &Error{Reason: ErrTooManyEntries}
 	}
 	for _, f := range zr.File {
 		mode := f.Mode()
@@ -308,12 +335,13 @@ func walkStream(src io.Reader, kind int, baseName string, budget int64, fn walkF
 			return wrap("", err)
 		}
 		// A pax global header describes the entries after it and names no file.
-		if h.Typeflag == tar.TypeXGlobalHeader {
-			continue
-		}
 		it := item{
 			Entry: Entry{Name: h.Name, Size: max(h.Size, 0), IsDir: h.Typeflag == tar.TypeDir},
 			mode:  tarMode(h.Typeflag),
+			skip:  h.Typeflag == tar.TypeXGlobalHeader,
+		}
+		if it.skip {
+			continue
 		}
 		if err := fn(it, func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }); err != nil {
 			return err
