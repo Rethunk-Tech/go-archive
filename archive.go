@@ -1,3 +1,13 @@
+// Package archive reads untrusted archives and writes what Extract unpacks
+// under a root the caller supplies.
+//
+// Format comes from the magic bytes, never the extension: zip, RAR 4 and 5, 7z,
+// tar, and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar.
+// Every reader is bounded in memory and in bytes before it produces output,
+// because the input is a download from the internet.
+//
+// Extract enforces the name, kind and size policy. Lister walks the same entries
+// with no policy, for a caller that only needs names and sizes.
 package archive
 
 import (
@@ -242,7 +252,7 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 	for _, f := range zr.File {
 		mode := f.Mode()
 		it := item{
-			Entry:     Entry{Name: zipName(f), Size: declared(f.UncompressedSize64), IsDir: mode.IsDir()},
+			Name: zipName(f), Size: declared(f.UncompressedSize64), IsDir: mode.IsDir(),
 			mode:      mode,
 			encrypted: f.Flags&1 != 0,
 			crc:       &f.CRC32,
@@ -268,9 +278,9 @@ func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) e
 	for _, f := range zr.File {
 		mode := f.Mode()
 		it := item{
-			Entry: Entry{Name: f.Name, Size: declared(f.UncompressedSize), IsDir: mode.IsDir()},
-			mode:  mode,
-			crc:   &f.CRC32,
+			Name: f.Name, Size: declared(f.UncompressedSize), IsDir: mode.IsDir(),
+			mode: mode,
+			crc:  &f.CRC32,
 		}
 		if err := fn(it, f.Open); err != nil {
 			return err
@@ -294,7 +304,7 @@ func walkRAR(src io.Reader, fn walkFunc) error {
 			return wrap("", err)
 		}
 		it := item{
-			Entry:     Entry{Name: h.Name, Size: max(h.UnPackedSize, 0), IsDir: h.IsDir},
+			Name: h.Name, Size: max(h.UnPackedSize, 0), IsDir: h.IsDir,
 			mode:      rarMode(h),
 			encrypted: h.Encrypted || h.HeaderEncrypted,
 			linkType:  int(h.LinkType),
@@ -315,7 +325,7 @@ func walkStream(src io.Reader, kind int, baseName string, budget int64, fn walkF
 	if !p.isTar {
 		// A bare stream's header declares no size, so -1 marks the one entry
 		// whose size only draining its bytes can give.
-		it := item{Entry: Entry{Name: singleName(baseName), Size: -1}}
+		it := item{Name: singleName(baseName), Size: -1}
 		return fn(it, func() (io.ReadCloser, error) { return io.NopCloser(p.r), nil })
 	}
 	tr := tar.NewReader(p.r)
@@ -329,9 +339,9 @@ func walkStream(src io.Reader, kind int, baseName string, budget int64, fn walkF
 		}
 		// A pax global header describes the entries after it and names no file.
 		it := item{
-			Entry: Entry{Name: h.Name, Size: max(h.Size, 0), IsDir: h.Typeflag == tar.TypeDir},
-			mode:  tarMode(h.Typeflag),
-			skip:  h.Typeflag == tar.TypeXGlobalHeader,
+			Name: h.Name, Size: max(h.Size, 0), IsDir: h.Typeflag == tar.TypeDir,
+			mode: tarMode(h.Typeflag),
+			skip: h.Typeflag == tar.TypeXGlobalHeader,
 		}
 		if it.skip {
 			continue

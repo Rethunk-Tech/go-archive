@@ -73,19 +73,28 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 	}
 	l := &Lister{src: src, size: size, baseName: baseName, opts: opts}
 	l.steps, l.stop = iter.Pull2(func(yield func(walkStep, error) bool) {
+		// The walk runs on the iterator's goroutine, where a panic from a
+		// format reader would end the process rather than fail one entry, so
+		// it is recovered here instead of being left to the caller.
+		var err error
+		defer func() {
+			if r := recover(); r != nil {
+				err = malformed(r)
+			}
+			// A caller that stopped early ended the walk on purpose; only a
+			// real failure is worth reporting through the iterator.
+			if err != nil && !errors.Is(err, errWalkStop) {
+				yield(walkStep{}, err)
+			}
+		}()
 		// A listing has no entry cap: counting is the caller's policy.
 		limits := walkLimits{budget: l.opts.budget()}
-		err := walk(l.src, l.size, l.baseName, limits, func(it item, open func() (io.ReadCloser, error)) error {
+		err = walk(l.src, l.size, l.baseName, limits, func(it item, open func() (io.ReadCloser, error)) error {
 			if !yield(walkStep{item: it, open: open}, nil) {
 				return errWalkStop
 			}
 			return nil
 		})
-		// A caller that stopped early ended the walk on purpose; only a real
-		// failure is worth reporting through the iterator.
-		if err != nil && !errors.Is(err, errWalkStop) {
-			yield(walkStep{}, err)
-		}
 	})
 	return l, nil
 }
@@ -104,6 +113,9 @@ func (l *Lister) Next() (Entry, error) {
 		return Entry{}, err
 	}
 	if !ok {
+		// Dropping the last entry leaves nothing Open may hand back, so a call
+		// after io.EOF reports no current entry rather than repeating it.
+		l.step = walkStep{}
 		return Entry{}, io.EOF
 	}
 	l.step, l.gen = step, l.gen+1

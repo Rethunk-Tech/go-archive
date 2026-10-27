@@ -1,0 +1,7 @@
+reconciled = "canon v0.1.0-poc"
+
+[deviations]
+# G304 and G703 name a path an attacker controls; every finding is a fixture a test
+# opened under t.TempDir() or testdata/, so the rule guards nothing there and
+# production code keeps both.
+"go-golangci-lint-00014" = ".golangci.yml excludes gosec G304 and G703 in _test.go files only, where the path is the test's own fixture"

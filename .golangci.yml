@@ -55,9 +55,18 @@ linters:
     - usetesting
     - wastedassign
     - zerologlint
-  # canon go-golangci-lint-00014
+  # canon go-golangci-lint-00014; the deviation is declared in canon.toml
   exclusions:
     generated: lax
+    rules:
+      # G304 and G703 name a path an attacker controls. Every finding here is a
+      # fixture this package's own test opened under t.TempDir() or testdata/,
+      # where the "tainted" value is the test's own argument, so the rule guards
+      # nothing. Production code keeps both rules.
+      - path: _test\.go$
+        linters:
+          - gosec
+        text: ^G(304|703)
   settings:
     # canon go-golangci-lint-00008
     govet:
