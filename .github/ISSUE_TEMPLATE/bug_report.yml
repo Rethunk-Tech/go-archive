@@ -1,0 +1,23 @@
+name: Bug report
+description: An archive is read wrong, or a reader panics
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What the package did, and what you expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit or tag of this module, and `go version`.
+    validations:
+      required: true
+  - type: textarea
+    id: archive
+    attributes:
+      label: Archive
+      description: Format, and how it was produced. Do not attach an archive you cannot share.

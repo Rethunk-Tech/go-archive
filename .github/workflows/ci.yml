@@ -33,9 +33,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # golangci-lint re-analyses every package without its cache (80.9 s cold against 4.0 s warm
-      # on the fleet's measurement). The key takes only the inputs that touch every package, so a
-      # run whose key changed still starts from the last cache via the prefix restore-key.
+      # Without this cache every pass re-checks every package. The key takes only the inputs
+      # that touch every package, and the prefix restore-key keeps a changed key from starting cold.
       - name: Cache golangci-lint analysis
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -69,9 +68,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Race-enabled on both platforms: this package's readers hold no shared state today, and the
-      # race detector is what keeps a decoder's internal goroutines from becoming shared state
-      # unnoticed.
+      # Race-enabled on both platforms. The readers hold no shared state, and the race
+      # detector is what keeps a decoder's goroutines from becoming shared state unnoticed.
       - name: Test
         uses: Rethunk-Tech/gh-actions/setup-go@67ec8bd68343d915462729ad119c355740cf6205 # v1.22
         with:

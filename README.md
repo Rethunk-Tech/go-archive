@@ -17,8 +17,6 @@ and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar. Archives 
 internet with no trust attached, so every reader here is bounded in memory and in bytes before it
 produces output.
 
-The module has one consumer and exports only what that consumer calls.
-
 ## Quick start
 
 ```bash

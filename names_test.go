@@ -105,8 +105,7 @@ func TestStripBareSuffixMatchesCaseInsensitively(t *testing.T) {
 	}
 }
 
-// A saved name carries the queue's id before a "~~" separator, so the archive's
-// own name survives that prefixing and a bare stream still extracts under it.
+// A leading "id~~" is a caller's prefix, not part of the stream's name.
 func TestSingleNameStripsTheSavedIDSeparator(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{

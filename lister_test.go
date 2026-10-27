@@ -213,8 +213,7 @@ func TestListerEntriesTotalsTheBytesDrained(t *testing.T) {
 	}
 }
 
-// The bound is on the reader Open hands out, so a bomb fails at the bound rather
-// than decompressing up to the old 2 GiB floor.
+// The bound is on the reader Open hands out, so a bomb fails there.
 func TestListerMaxEntryBytesStopsAStreamBomb(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
@@ -301,8 +300,7 @@ func TestListerUnsupportedFormat(t *testing.T) {
 	}
 }
 
-// Close is idempotent and never closes the caller's Source, which the facade
-// owns.
+// Close is idempotent and never closes the caller's Source.
 func TestListerCloseIsIdempotentAndLeavesTheSourceOpen(t *testing.T) {
 	t.Parallel()
 	path := buildZip(t, zentry{name: "a.txt", body: "a"})
@@ -336,9 +334,8 @@ func TestListerCloseIsIdempotentAndLeavesTheSourceOpen(t *testing.T) {
 	}
 }
 
-// A listing keeps a name Extract refuses: encryption is extraction's policy, and
-// a caller previewing a pack needs to see what is inside it. The zip case is the
-// one the plan names, because the zip walk never reads the encrypted flag.
+// Encryption is extraction's policy, so a listing reports the entry. The zip
+// walk never reads the encrypted flag.
 func TestListerReportsAnEncryptedEntryThatExtractRefuses(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

@@ -1,48 +1,32 @@
 # AGENTS.md
 
-Package `archive` reads untrusted archives. It has one consumer and exports only
-what that consumer calls; anything else stays unexported, including both 7z entry
-points and every cap no user-facing message quotes.
-
-The module is standalone. It imports no consumer package and is gated with the
-consumer nowhere in the loop.
+Package `archive` reads untrusted archives. It exports only what its consumer
+calls. Both 7z entry points stay unexported, and so does every cap no
+user-facing message quotes. The module imports no consumer package.
 
 ## Gate
-
-`gate` is the one command:
 
 ```sh
 gate
 ```
 
-`gate` derives build and test from the module, and finds lint, vuln and workflow
-lint only if they are on PATH. A CI runner has none of them, so `.gate.toml`
-names all five: lint, vuln and format through the `tool` directive in `go.mod`
-via `go tool`, workflow lint through `scripts/actionlint`, and the two Windows
-gates no Linux tool reaches. A gate that a runner cannot resolve is skipped
-without failing the run, which is why the override has to exist rather than
-being left to detection.
+`.gate.toml` names the gates a runner cannot resolve from PATH. Lint, vuln and
+format run through `go tool`, so their versions are the `tool` directive in
+`go.mod`. Workflow lint is `scripts/actionlint`: actionlint 1.7.12 does not
+compile against the `yaml.v3` this module resolves, so the script pins a
+release and checksum. CI fetches its own copies of the same pins.
 
-That also means the binaries come from the module and never from a global
-install — a linter bump is a diff to `go.mod`, not a silently changed verdict.
-`scripts/actionlint` is the exception: actionlint 1.7.12 no longer compiles
-against the `yaml.v3` the module graph resolves, so the script pins its release
-and checksum instead of building it through `go tool`. CI fetches its own
-releases, so the pinned versions in the workflow mirror both and have to track
-them.
-
-`go test` must also pass on Windows, which CI covers with a `windows-latest` job
-running the same tests. `WindowsSegment` and the case-collision bookkeeping are
-the package's own logic and are verified on Linux, but `os.Root`'s reserved-name
-refusal is enforced by the platform, so only that job reaches it. POSIX file
-modes are also platform-dependent: Windows synthesises `0666` for a writable file
-whatever mode was requested, so the mode assertions run off Windows.
+`WindowsSegment` and case-collision bookkeeping run on Linux. `os.Root`'s
+reserved-name refusal is the platform's, so only the `windows-latest` job
+reaches it. Windows synthesises mode `0666` for a writable file, so mode
+assertions run off Windows.
 
 ## Shape
 
-One unexported `walk` enumerates an archive's entries. `Extract` and `Lister` both
-go through it, which is what keeps them from disagreeing about what an archive
-holds. Their bounds differ and that difference is the design:
+One package. An unexported `walk` is the only enumerator; `Extract` and
+`Lister` both use it. `item`, `walkFunc` and `walkLimits` stay unexported.
+A second package would have to export them to keep one enumerator, which is
+a larger surface. Tests are in-package for the same reason.
 
 | | `Extract` | `Lister` |
 | --- | --- | --- |
@@ -51,37 +35,26 @@ holds. Their bounds differ and that difference is the design:
 | Bytes | caps every read against the extraction caps | caps each entry at `ListerOptions.MaxEntryBytes` |
 | Destination | writes through the caller's `*os.Root` | writes nothing |
 
-A change that makes a listing cap entries is the invariant breaking, not a
-feature. `Extract` refuses an over-declared zip or 7z entry count before writing,
-so the refusal leaves no partial tree.
+A listing that caps entries breaks that split. `Extract` refuses an
+over-declared zip or 7z entry count before writing, so the refusal leaves no
+partial tree.
 
-Two decompression bounds are not policy and cannot be lowered away: the decoder
-window (`maxDecoderBytes`) is set where the decoder is built, and a stream's
-aggregate budget stops a bomb the per-entry bound would let through spread thin.
+`maxDecoderBytes` is set where the decoder is built. A stream's aggregate
+budget stops a bomb the per-entry bound would allow spread thin. Neither is
+policy, and neither can be lowered away.
 
 ## Files
 
-One package, split by concern rather than by type:
-
 | File | Holds |
 | --- | --- |
-| `archive.go` | the package doc, the cap constants and `Options`, `Source`, `Extract` |
-| `walk.go` | `walk` and the per-format enumerators, and each format's entry-mode mapping |
-| `extract.go` | the `extractor`: name admission, case collisions, writing, byte caps |
-| `stream.go` | streaming-format detection, the decoder window, and the stream budget |
-| `detect.go` | the format identifiers and magic-byte detection |
-| `sevenzip_limits.go` | the 7z header walk, which runs before the reader sees the archive |
-| `lister.go`, `names.go`, `size.go`, `recover.go` | one export each; see their doc comments |
-
-A second package is not warranted and should not be proposed. `walk` hands each
-entry over as `item`, `walkFunc` and `walkLimits`, and `Lister` drives that same
-walk through an iterator. Splitting would have to export those three types and
-the budget rule to keep one enumerator serving both entry points, which is a
-larger surface than the unexported one it replaces. The tests are in-package for
-the same reason.
+| `archive.go` | package doc, cap constants, `Options`, `Source`, `Extract` |
+| `walk.go` | `walk`, per-format enumerators, entry-mode mapping |
+| `extract.go` | name admission, case collisions, writing, byte caps |
+| `stream.go` | streaming-format detection, decoder window, stream budget |
+| `detect.go` | format identifiers and magic-byte detection |
+| `sevenzip_limits.go` | 7z header walk, before the reader sees the archive |
+| `lister.go`, `names.go`, `size.go`, `recover.go` | one export each |
 
 ## Comments
 
-Say why, not history. No "previously", no ticket or finding IDs, no benchmark
-figures, and no record of an alternative that was rejected: those drift, and git
-already holds them.
+Say why. Git holds the history.
