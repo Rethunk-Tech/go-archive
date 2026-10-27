@@ -59,30 +59,18 @@ for {
 
 ## Contracts
 
-`Extract` refuses path traversal, names that are not allowed, case collisions, symlinks and
-hardlinks, device/pipe/socket entries, encrypted archives, and archives over the entry, entry-size,
-total-size or ratio caps. It stops at the first error and leaves the partial tree, so pass a
-throwaway directory and discard it on failure.
-
-`baseName` is the name a bare compressed stream yields, since such a stream carries no filename of
-its own. Pass the name the file arrived under. The one convention it honours is a `~~` separator:
-everything before it is dropped, because a caller that stores files under an identifier prefix
-(`0a1b2c~~notes.txt.gz`) otherwise extracts `0a1b2c~~notes.txt`. A single trailing stream suffix
-(`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`) is then removed, case-insensitively. Formats that carry
-their own entry names ignore `baseName`.
-
-`Lister` applies no entry caps, no destination and no naming policy. Entry counts and name
-acceptability are the caller's. The one bound it keeps is `ListerOptions.MaxEntryBytes`, because the
-stream formats cannot be listed without decompressing them.
-
-The walk is forward-only, because the formats are. `Open` is valid only until the next `Next`, which
-returns `io.EOF` at the end. `Close` is idempotent and never closes the `Source` you passed in.
-`Entry.Name` is normalised, with `\` becoming `/` and a trailing `/` dropped.
-
-Reading an entry is optional, and skipping one is cheaper than reading it. A skipped entry reports the
-size its header declared, which an archive can set to anything; a bare compressed stream declares none
-and reports `-1`. Use `Entries()` when you need the bytes actually there, since it drains each entry
-and reports the real count.
+| | Contract |
+| --- | --- |
+| `Extract` refuses | path traversal, disallowed names, case collisions, symlinks and hardlinks, device/pipe/socket entries, encrypted archives, and archives over the entry, entry-size, total-size or ratio caps |
+| `Extract` on failure | stops at the first error and leaves the partial tree, so pass a throwaway directory and discard it |
+| `baseName` | names the file a bare stream yields; a `~~` prefix is dropped and one trailing stream suffix (`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`) removed, case-insensitively; formats carrying their own names ignore it |
+| `Lister` refuses | nothing; entry counts and name acceptability are the caller's |
+| `Lister`'s one bound | `ListerOptions.MaxEntryBytes`, because a stream cannot be listed without decompressing it |
+| The walk | forward-only, because the formats are; `Open` is valid only until the next `Next` |
+| `Close` | idempotent, and never closes the `Source` you passed in |
+| `Entry.Name` | normalised: `\` becomes `/`, a trailing `/` is dropped |
+| A skipped entry | reports the size its header declared, which an archive can set to anything; a bare stream reports `-1` |
+| `Entries()` | drains each entry, so the count it reports is the bytes actually there |
 
 ## Caps
 
