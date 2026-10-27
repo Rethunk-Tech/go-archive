@@ -16,11 +16,9 @@ closes the caller's `Source`. Reading an entry is optional; `Entry.Name` normali
 drops a trailing `/`.
 
 `ListerOptions.MaxEntryBytes` of zero means 256 MiB, deliberately tight: a caller that needs more
-must say so. Zero `Options` fields take the `Default*` caps. Go 1.27.3 or newer.
+must say so. Zero `Options` fields take the `Default*` caps. Go 1.27.3+; `src` is a `Source`, `size` its length.
 
 ## Extract
-
-In both examples `src` is a `Source` and `size` is its length in bytes.
 
 ```go
 func extract(src archive.Source, size int64, baseName, dest string) error {
