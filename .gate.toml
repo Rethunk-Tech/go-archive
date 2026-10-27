@@ -1,0 +1,21 @@
+# `gate` derives build, lint, test, vuln and actionlint from the module and the
+# workflow directory. These are the three it cannot infer.
+#
+# `gate` runs its detected `golangci-lint run`, which does not run formatters, so
+# an unformatted file passes the lint gate. This is that check, as a diff rather
+# than a rewrite: a gate that rewrites the tree passes on a file nobody saw.
+[gates.fmt]
+run = "go tool golangci-lint fmt --diff ./..."
+
+# The Windows-only behaviour (WindowsSegment, the mode assertions, case folding,
+# os.Root's reserved names) is a runtime value, so no Linux gate can reach it.
+# This compiles the test files for Windows as the strongest local stand-in; the
+# verdict itself comes from the windows-latest job in ci.yml.
+[gates.crosscompile]
+run = "GOOS=windows GOARCH=amd64 go vet ./..."
+
+# No-op in CI, which never uses --no-verify and already scanned every commit on
+# the way in, so a second scan there spends runner minutes to repeat it. The
+# guard is what keeps one definition serving both hooks.
+[gates.gitleaks]
+run = '[ -n "$CI" ] || gitleaks git --redact --no-banner --log-level warn'

@@ -1,11 +1,6 @@
 # canon go-golangci-lint-00001
 version: "2"
 
-# Adapted from github.com/Rethunk-Tech/canon/go/golangci-lint/.golangci.yml with
-# the Mortar-only settings removed: the fsx forbidigo rule and its exclusion
-# list (this module has no fsx, and it calls os.ReadFile/os.WriteFile
-# directly), the Wails replace allow-list, and the Mortar package names in the
-# ireturn allow-list. The linter set itself is canon's, untouched.
 linters:
   # canon go-golangci-lint-00002
   default: standard
