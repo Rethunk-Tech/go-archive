@@ -17,35 +17,39 @@ concurrency:
 
 jobs:
   gate:
-    # Lint, format, vet and govulncheck read the same source on any OS, and the reusable action's
-    # golangci-lint steps ship Linux and macOS releases only, so this job runs once, on Linux.
+    # The whole gate as a contributor runs it, not a restatement of its steps: a check that exists
+    # only in this file is a red main waiting to happen. `.gate.toml` carries the three gates `gate`
+    # cannot infer, and go.mod's tool directive supplies the binaries.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # go.mod's `tool` directive is the source of truth for the gate's tool versions: `go tool
-      # golangci-lint` is what a contributor runs. The action fetches its own release by version
-      # instead, so lint-version is the one setting that can drift from that directive and must
-      # track it.
-      - name: Lint, format and vulnerabilities
+      - name: Set up Go
         uses: Rethunk-Tech/gh-actions/setup-go@67ec8bd68343d915462729ad119c355740cf6205 # v1.22
         with:
           go-version-file: go.mod
-          lint-version: v2.15.0
-          run-lint: "true"
-          run-fmt: "true"
-          run-govulncheck: "true"
 
-      # golangci-lint's govet covers this, but bare `go vet` is the command a contributor runs and
-      # needs no config to interpret, so a finding from it is never a config question. It runs even
-      # when the gate above failed, so one run reports everything that is wrong.
-      - name: Vet
-        if: ${{ !cancelled() }}
-        run: go vet ./...
+      # golangci-lint re-analyses every package without its cache (80.9 s cold against 4.0 s warm
+      # on the fleet's measurement). The key takes only the inputs that touch every package, so a
+      # run whose key changed still starts from the last cache via the prefix restore-key.
+      - name: Cache golangci-lint analysis
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yml') }}
+          restore-keys: golangci-lint-${{ runner.os }}-
+
+      # Pinned rather than floating: a gate release that changes detection must not change this
+      # repository's verdict without a commit here.
+      - name: Install gate
+        run: go install github.com/Rethunk-Tech/rethunk-gate-cli/cmd/gate@v0.6.9
+
+      - name: Gate
+        run: gate --timeout 15m
 
   test:
     # Windows runs the tests, not a build. The 0o600/0o750 mode assertions, case-collision
@@ -65,11 +69,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Race-enabled on both platforms: this package's readers hold no shared state today, and the
+      # race detector is what keeps a decoder's internal goroutines from becoming shared state
+      # unnoticed.
       - name: Test
         uses: Rethunk-Tech/gh-actions/setup-go@67ec8bd68343d915462729ad119c355740cf6205 # v1.22
         with:
           go-version-file: go.mod
-          run-test: "true"
+          run-test-race: "true"
 
       # Linux only: fuzzing one target on two runners buys the same search twice, and the Windows
       # leg already replays every seed corpus. The other targets are FuzzExtract,
