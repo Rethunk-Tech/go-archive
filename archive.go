@@ -63,12 +63,6 @@ func (o Options) ratioCap(srcSize int64) int64 {
 	return min(o.MaxTotalBytes, max(o.RatioFloor, srcSize*o.MaxRatio))
 }
 
-// payloadBudget is everything a stream may decompress: the total cap, the
-// headers the entry cap can put around it, and the peek's slack.
-func (o Options) payloadBudget() int64 {
-	return o.MaxTotalBytes + int64(o.MaxEntries)*tarOverhead + 1<<20
-}
-
 func (o Options) withDefaults() Options {
 	if o.MaxEntryBytes == 0 {
 		o.MaxEntryBytes = DefaultMaxEntryBytes
@@ -205,9 +199,8 @@ var errWalkStop = errors.New("walk stopped")
 
 // walk enumerates an archive's entries once, forward, handing each to fn.
 // Extract and Lister both enumerate through it and so cannot disagree about
-// what an archive holds; only their read budgets differ. budget is the payload
-// a stream may decompress, which has to be set where the decoder is built
-// rather than on what comes out of it.
+// what an archive holds; only their bounds and reads differ. The stream budget
+// has to be set where the decoder is built rather than on what comes out of it.
 func walk(src Source, size int64, baseName string, limits walkLimits, fn walkFunc) error {
 	kind := detectSource(src)
 	switch kind {

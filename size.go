@@ -41,7 +41,7 @@ func DeclaredSize(src Source, size int64) (_ int64, err error) {
 			return 0, err
 		}
 		// The reader allocates the window on Next() and compares it against a 4 GiB default, so a crafted header
-		// forces the allocation before a byte is read and capReader sits below it and cannot help.
+		// forces the allocation before a byte is read and no reader cap sits below it to prevent that.
 		rr, err := rardecode.NewReader(io.NewSectionReader(src, start, size-start), rardecode.MaxDictionarySize(maxDecoderBytes))
 		if err != nil {
 			return 0, wrap("", err)
