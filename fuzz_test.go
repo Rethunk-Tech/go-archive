@@ -339,14 +339,16 @@ func openLister(t *testing.T, src string) (*Lister, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Lister.Close never closes the caller's Source, so the harness closes it.
+	// Windows refuses to delete a file that still has an open handle, which
+	// fails TempDir cleanup rather than the test.
+	t.Cleanup(func() { _ = f.Close() })
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	l, err := NewLister(f, info.Size(), filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	return l, nil
