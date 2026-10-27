@@ -1,6 +1,19 @@
-# `gate` derives build, lint, test, vuln and actionlint from the module and the
-# workflow directory. These are the three it cannot infer.
-#
+# `gate` derives build and test from the module, and finds `golangci-lint`,
+# `govulncheck` and `actionlint` only on PATH. A runner has none of the three, so
+# detection there falls back to `go vet` and skips the other two without failing
+# the run: the verdict would be green while the lint, vulnerability and workflow
+# checks never executed. Each override below runs the module's own pinned binary
+# through `go tool`, or the checksummed download for actionlint, which is not a
+# module.
+[gates.lint]
+run = "go tool golangci-lint run --allow-parallel-runners ./..."
+
+[gates.vuln]
+run = "go tool govulncheck ./..."
+
+[gates.workflows]
+run = "./scripts/actionlint"
+
 # `gate` runs its detected `golangci-lint run`, which does not run formatters, so
 # an unformatted file passes the lint gate. This is that check, as a diff rather
 # than a rewrite: a gate that rewrites the tree passes on a file nobody saw.
