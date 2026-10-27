@@ -19,8 +19,8 @@ the guarantees above it:
 
 - An entry that writes outside the `*os.Root` passed to `Extract`, whether through a traversal name,
   a symlink, a hardlink, or a case collision on a case-insensitive filesystem.
-- A crafted header that makes a decoder allocate far beyond `MaxDecoderBytes`, including a
-  dictionary or window size declared in the archive itself.
+- A crafted header that makes a decoder allocate far beyond the 256 MiB decoder window cap,
+  including a dictionary or window size declared in the archive itself.
 - A crafted archive that makes a reader panic rather than return an error. `RecoverMalformed` turns
   such a panic into `ErrMalformed` for a deferred call, but a reachable panic is still a bug.
 - A `Lister` that decompresses past `ListerOptions.MaxEntryBytes`, or reports a size that differs

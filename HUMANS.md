@@ -64,6 +64,13 @@ hardlinks, device/pipe/socket entries, encrypted archives, and archives over the
 total-size or ratio caps. It stops at the first error and leaves the partial tree, so pass a
 throwaway directory and discard it on failure.
 
+`baseName` is the name a bare compressed stream yields, since such a stream carries no filename of
+its own. Pass the name the file arrived under. The one convention it honours is a `~~` separator:
+everything before it is dropped, because a caller that stores files under an identifier prefix
+(`0a1b2c~~notes.txt.gz`) otherwise extracts `0a1b2c~~notes.txt`. A single trailing stream suffix
+(`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`) is then removed, case-insensitively. Formats that carry
+their own entry names ignore `baseName`.
+
 `Lister` applies no entry caps, no destination and no naming policy. Entry counts and name
 acceptability are the caller's. The one bound it keeps is `ListerOptions.MaxEntryBytes`, because the
 stream formats cannot be listed without decompressing them.
@@ -88,7 +95,14 @@ listing large streams must set the bound it actually needs.
 
 ## Requirements
 
-Go 1.27.3 or newer.
+Go 1.27.3 or newer, plus `lefthook` and `gitleaks` on PATH if you want the git hooks.
+
+```bash
+lefthook install
+```
+
+That is per clone; git does not commit hooks. Pre-commit scans staged changes for secrets, and
+pre-push runs `gate`.
 
 ## Verify
 

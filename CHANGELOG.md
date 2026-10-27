@@ -16,3 +16,5 @@ Notable changes to `go-archive`. The format follows
   force the allocation its header names.
 - `RecoverMalformed` turns a panic in a format reader into `ErrMalformed`, so a crafted download
   fails its item instead of ending the process.
+- `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
+  `Options.Segment` replaces it when the destination platform differs.
