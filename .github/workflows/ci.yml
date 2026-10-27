@@ -1,0 +1,80 @@
+name: CI
+
+# The gate on every pull request and every push to main. There is no release workflow: this is a
+# library, and consumers pin a commit.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push makes the older run's verdict worthless, so it cancels that run rather than racing it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # Lint, format, vet and govulncheck read the same source on any OS, and the reusable action's
+    # golangci-lint steps ship Linux and macOS releases only, so this job runs once, on Linux.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # go.mod's `tool` directive is the source of truth for the gate's tool versions: `go tool
+      # golangci-lint` is what a contributor runs. The action fetches its own release by version
+      # instead, so lint-version is the one setting that can drift from that directive and must
+      # track it.
+      - name: Lint, format and vulnerabilities
+        uses: Rethunk-Tech/gh-actions/setup-go@67ec8bd68343d915462729ad119c355740cf6205 # v1.22
+        with:
+          go-version-file: go.mod
+          lint-version: v2.15.0
+          run-lint: "true"
+          run-fmt: "true"
+          run-govulncheck: "true"
+
+      # golangci-lint's govet covers this, but bare `go vet` is the command a contributor runs and
+      # needs no config to interpret, so a finding from it is never a config question. It runs even
+      # when the gate above failed, so one run reports everything that is wrong.
+      - name: Vet
+        if: ${{ !cancelled() }}
+        run: go vet ./...
+
+  test:
+    # Windows runs the tests, not a build. The 0o600/0o750 mode assertions, case-collision
+    # detection, WindowsSegment and os.Root's reserved-name handling are runtime values there, so a
+    # compile would prove nothing about any of them.
+    strategy:
+      # Both legs report, so one platform's failure never hides the other's.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # A decompressor that never returns would otherwise hold a runner for the full six hours.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test
+        uses: Rethunk-Tech/gh-actions/setup-go@67ec8bd68343d915462729ad119c355740cf6205 # v1.22
+        with:
+          go-version-file: go.mod
+          run-test: "true"
+
+      # Linux only: fuzzing one target on two runners buys the same search twice, and the Windows
+      # leg already replays every seed corpus. The other targets are FuzzExtract,
+      # FuzzExtractZipEntries, FuzzExtractStreams and, once it lands, FuzzList; this step names the
+      # cheapest of them so it stays well inside two minutes.
+      - name: Fuzz smoke
+        if: runner.os == 'Linux'
+        run: go test -run=^$ -fuzz=FuzzCleanName -fuzztime=20s .
