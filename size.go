@@ -6,31 +6,21 @@ import (
 	"io"
 	"math"
 
-	"github.com/Rethunk-Tech/mortar/internal/fsx"
-
 	"github.com/nwaples/rardecode/v2"
 )
 
 // DeclaredSize sums the uncompressed sizes the archive's headers declare. It
 // is informational (an untrusted archive can lie); Extract's caps count bytes.
-func DeclaredSize(archivePath string) (_ int64, err error) {
+func DeclaredSize(src Source, size int64) (_ int64, err error) {
 	defer RecoverMalformed(&err)
-	f, err := fsx.Open(archivePath)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
+
 	var magic [headLen]byte
-	n, _ := io.ReadFull(f, magic[:])
+	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
 
 	var total int64
 	switch detect(magic[:n]) {
 	case fmtZip:
-		zr, err := zip.NewReader(f, info.Size())
+		zr, err := zip.NewReader(src, size)
 		if err != nil && (zr == nil || !errors.Is(err, zip.ErrInsecurePath)) {
 			return 0, wrap("", err)
 		}
@@ -38,7 +28,7 @@ func DeclaredSize(archivePath string) (_ int64, err error) {
 			total += int64(min(e.UncompressedSize64, math.MaxInt64))
 		}
 	case fmtSevenZip:
-		zr, err := OpenSevenZip(f, info.Size())
+		zr, err := openSevenZip(src, size)
 		if err != nil {
 			return 0, wrap("", err)
 		}
@@ -46,10 +36,13 @@ func DeclaredSize(archivePath string) (_ int64, err error) {
 			total += int64(min(e.UncompressedSize, math.MaxInt64))
 		}
 	case fmtRAR:
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
 			return 0, err
 		}
-		rr, err := rardecode.NewReader(f)
+		// The reader allocates the window on Next() and compares it against a 4 GiB default, so a crafted header
+		// forces the allocation before a byte is read and capReader sits below it and cannot help.
+		rr, err := rardecode.NewReader(io.NewSectionReader(src, start, size-start), rardecode.MaxDictionarySize(MaxDecoderBytes))
 		if err != nil {
 			return 0, wrap("", err)
 		}
@@ -64,10 +57,11 @@ func DeclaredSize(archivePath string) (_ int64, err error) {
 			total += h.UnPackedSize
 		}
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
 			return 0, err
 		}
-		return streamSize(f, detect(magic[:n]), info.Size())
+		return streamSize(io.NewSectionReader(src, start, size-start), detect(magic[:n]), size)
 	default:
 		return 0, &Error{Reason: ErrUnsupportedFormat}
 	}

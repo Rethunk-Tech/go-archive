@@ -10,7 +10,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"path/filepath"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -97,7 +96,7 @@ type payload struct {
 }
 
 // openPayload decompresses r (already at the file's start) as kind, within the extraction caps.
-func openPayload(r io.Reader, kind int, opts options) (*payload, error) {
+func openPayload(r io.Reader, kind int, opts Options) (*payload, error) {
 	closeFn := func() {}
 	var plain io.Reader
 	switch kind {
@@ -143,13 +142,13 @@ func openPayload(r io.Reader, kind int, opts options) (*payload, error) {
 	return &payload{r: br, isTar: kind == fmtTar || isTarHeader(head), close: closeFn}, nil
 }
 
-// singleName is the name a bare compressed file extracts under: the archive's own, without its suffix.
-func singleName(archivePath string) string {
-	base := filepath.Base(archivePath)
-	if _, original, ok := strings.Cut(base, nameSep); ok {
-		base = original
+// singleName is the name a bare compressed file extracts under: the name the
+// caller supplied, without its stream suffix when it has one.
+func singleName(baseName string) string {
+	if _, original, ok := strings.Cut(baseName, "~~"); ok {
+		baseName = original
 	}
-	name := StripExtension(base)
+	name := stripBareSuffix(baseName)
 	if name == "" || name == "." {
 		return "file"
 	}
@@ -172,7 +171,7 @@ func tarKind(h *tar.Header) (isDir, skip bool, err error) {
 	return false, false, &Error{Entry: h.Name, Reason: ErrSpecialFile}
 }
 
-func (x *extractor) stream(r io.Reader, kind int, archivePath string) error {
+func (x *extractor) stream(r io.Reader, kind int, baseName string) error {
 	p, err := openPayload(r, kind, x.opts)
 	if err != nil {
 		return err
@@ -180,7 +179,7 @@ func (x *extractor) stream(r io.Reader, kind int, archivePath string) error {
 	defer p.close()
 	if !p.isTar {
 		open := func() (io.ReadCloser, error) { return io.NopCloser(p.r), nil }
-		return x.entry(singleName(archivePath), false, open, nil)
+		return x.entry(singleName(baseName), false, open, nil)
 	}
 	tr := tar.NewReader(p.r)
 	for {
@@ -205,40 +204,9 @@ func (x *extractor) stream(r io.Reader, kind int, archivePath string) error {
 	}
 }
 
-func (v *previewer) stream(r io.Reader, kind int, archivePath string, srcSize int64) error {
-	p, err := openPayload(r, kind, streamOptions(srcSize))
-	if err != nil {
-		return err
-	}
-	defer p.close()
-	if !p.isTar {
-		n, err := io.Copy(io.Discard, p.r)
-		if err != nil {
-			return wrap("", err)
-		}
-		v.add(singleName(archivePath), n, false, func() (io.ReadCloser, error) { return nil, io.EOF })
-		return nil
-	}
-	tr := tar.NewReader(p.r)
-	for !v.full() {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return wrap("", err)
-		}
-		if h.Typeflag == tar.TypeXGlobalHeader {
-			continue
-		}
-		v.add(h.Name, max(h.Size, 0), h.Typeflag == tar.TypeDir, func() (io.ReadCloser, error) { return io.NopCloser(tr), nil })
-	}
-	return nil
-}
-
 // streamOptions are the caps for reading a stream of srcSize bytes without extracting it.
-func streamOptions(srcSize int64) options {
-	o := options{MaxEntries: DefaultMaxEntries}.withDefaults()
+func streamOptions(srcSize int64) Options {
+	o := Options{MaxEntries: DefaultMaxEntries}.withDefaults()
 	o.MaxTotalBytes = o.ratioCap(srcSize)
 	return o
 }

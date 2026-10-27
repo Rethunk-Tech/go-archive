@@ -5,28 +5,20 @@ package archive
 import (
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
-
-	"github.com/Rethunk-Tech/mortar/internal/fsx"
-	"github.com/Rethunk-Tech/mortar/internal/winname"
-	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/bodgit/sevenzip"
-	"github.com/klauspost/compress/zstd"
 	"github.com/nwaples/rardecode/v2"
 )
 
-// Default caps, applied to every zero field of options. Thunderstore allows gigantic packages, so the byte caps sit far
+// Default caps, applied to every zero field of Options. Thunderstore allows gigantic packages, so the byte caps sit far
 // above any real one and the ratio guard, not these, stops a small archive claiming them.
 const (
 	DefaultMaxEntryBytes int64 = 32 << 30
@@ -43,24 +35,35 @@ const (
 	DefaultRatioFloor int64 = 2 << 30
 )
 
-// options lowers or raises the extraction caps; a zero field means its default.
-type options struct {
+// Options lowers or raises the extraction caps; a zero field means its default.
+type Options struct {
 	MaxEntryBytes int64
 	MaxTotalBytes int64
 	MaxEntries    int
 	MaxRatio      int64
 	RatioFloor    int64
+	// Segment reports whether one path segment is a name the destination platform
+	// will store as written. nil means WindowsSegment.
+	Segment func(seg string) bool
+}
+
+// segment is the name policy cleanName applies, defaulting to WindowsSegment.
+func (o Options) segment() func(seg string) bool {
+	if o.Segment == nil {
+		return WindowsSegment
+	}
+	return o.Segment
 }
 
 // ratioCap is the most an archive of srcSize bytes may unpack to, or MaxTotalBytes when its size is unknown.
-func (o options) ratioCap(srcSize int64) int64 {
+func (o Options) ratioCap(srcSize int64) int64 {
 	if srcSize <= 0 {
 		return o.MaxTotalBytes
 	}
 	return min(o.MaxTotalBytes, max(o.RatioFloor, srcSize*o.MaxRatio))
 }
 
-func (o options) withDefaults() options {
+func (o Options) withDefaults() Options {
 	if o.MaxEntryBytes == 0 {
 		o.MaxEntryBytes = DefaultMaxEntryBytes
 	}
@@ -79,46 +82,10 @@ func (o options) withDefaults() options {
 	return o
 }
 
-// Reasons carried by Error. A disk-full write is reported as the underlying
-// error, so errors.Is(err, syscall.ENOSPC) holds.
-var (
-	ErrUnsupportedFormat = errors.New("not a zip, RAR, 7z, tar, gzip, xz, lzma, zstd or bzip2 archive")
-	ErrEncrypted         = errors.New("archive is encrypted")
-	ErrTraversal         = errors.New("path escapes the destination")
-	ErrUnsafeName        = errors.New("name is not allowed")
-	ErrCaseCollision     = errors.New("name collides with another entry")
-	ErrLink              = errors.New("symlinks and hardlinks are not allowed")
-	ErrSpecialFile       = errors.New("device, pipe and socket entries are not allowed")
-	ErrEntryTooLarge     = errors.New("entry exceeds the size cap")
-	ErrArchiveTooLarge   = errors.New("archive exceeds the extracted size cap")
-	ErrTooManyEntries    = errors.New("archive exceeds the entry cap")
-	ErrRatio             = errors.New("archive unpacks to far more than its size allows")
-	ErrChecksum          = errors.New("checksum mismatch")
-	ErrMalformed         = errors.New("archive is malformed")
-)
-
-// Error names the entry that failed and why. Entry is empty for a failure of
-// the archive as a whole.
-type Error struct {
-	Entry  string
-	Reason error
-}
-
-func (e *Error) Error() string {
-	if e.Entry == "" {
-		return "archive: " + e.Reason.Error()
-	}
-	return fmt.Sprintf("archive: entry %q: %v", e.Entry, e.Reason)
-}
-
-func (e *Error) Unwrap() error { return e.Reason }
-
-// Extract unpacks the archive at archivePath into dest, detecting the format
-// from its magic bytes. dest must exist. Extraction stops at the first
-// failure and leaves what it wrote in dest, so the caller passes a temp
-// directory and discards it on error.
-func Extract(archivePath, dest string) error {
-	return extractWith(archivePath, dest, options{})
+// Source is what a reader needs. *os.File and *bytes.Reader both satisfy it.
+type Source interface {
+	io.ReaderAt
+	io.Seeker
 }
 
 // RecoverMalformed turns a panic in a format reader, which a crafted archive can cause, into ErrMalformed for *err, so an
@@ -129,48 +96,51 @@ func RecoverMalformed(err *error) {
 	}
 }
 
-// OpenSevenZip is sevenzip.NewReader with a panic from a crafted header returned as ErrMalformed. Reading a file
-// from the result can panic too, so a caller outside this package also defers RecoverMalformed.
-func OpenSevenZip(r io.ReaderAt, size int64) (zr *sevenzip.Reader, err error) {
+// openSevenZip is sevenzip.NewReader with a panic from a crafted header returned as ErrMalformed. Reading a file from
+// the result can panic too, so the caller defers RecoverMalformed as well.
+func openSevenZip(r io.ReaderAt, size int64) (zr *sevenzip.Reader, err error) {
 	defer RecoverMalformed(&err)
 	return sevenzip.NewReader(r, size)
 }
 
-// extractWith is Extract with lowered or raised caps, which the tests use.
-func extractWith(archivePath, dest string, opts options) (err error) {
+// Extract unpacks the archive src (size bytes) into dest, detecting the format
+// from its magic bytes. dest must exist and is rooted by the caller. baseName
+// names the single file a bare compressed stream yields. Extraction stops at
+// the first failure and leaves what it wrote in dest, so the caller passes a
+// temp directory and discards it on error. A zero Options field means its
+// default.
+func Extract(src Source, size int64, baseName string, dest *os.Root, opts Options) error {
+	return extract(src, size, baseName, dest, opts)
+}
+
+// extract is Extract with caps the tests lower.
+func extract(src Source, size int64, baseName string, dest *os.Root, opts Options) (err error) {
 	defer RecoverMalformed(&err)
-	f, err := fsx.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
 
 	var magic [headLen]byte
-	n, _ := io.ReadFull(f, magic[:])
+	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
 	head := magic[:n]
 
-	x := &extractor{dest: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
-	x.ratioMax = x.opts.ratioCap(info.Size())
+	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
+	x.ratioMax = x.opts.ratioCap(size)
 
 	switch detect(head) {
 	case fmtZip:
-		return x.zip(f, info.Size())
+		return x.zip(src, size)
 	case fmtRAR:
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
 			return err
 		}
-		return x.rar(f)
+		return x.rar(io.NewSectionReader(src, start, size-start))
 	case fmtSevenZip:
-		return x.sevenZip(f, info.Size())
+		return x.sevenZip(src, size)
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
 			return err
 		}
-		return x.stream(f, detect(head), archivePath)
+		return x.stream(io.NewSectionReader(src, start, size-start), detect(head), baseName)
 	}
 	return &Error{Reason: ErrUnsupportedFormat}
 }
@@ -201,8 +171,8 @@ func detect(head []byte) int {
 }
 
 type extractor struct {
-	dest    string
-	opts    options
+	root    *os.Root
+	opts    Options
 	entries int
 	// ratioMax is the most the archive may unpack to for its size.
 	ratioMax int64
@@ -238,27 +208,11 @@ func (x *extractor) zip(r io.ReaderAt, size int64) error {
 	return nil
 }
 
-// zipName is an entry's name as UTF-8. Zips written without the UTF-8 flag carry names in the writer's locale;
-// for Stardew mods that is most often GBK from Chinese-locale tools, and GB18030 decodes it. A name left as raw
-// bytes extracts to a folder the game's .NET runtime cannot open.
-func zipName(f *zip.File) string { return utf8Name(f.Name) }
-
-func utf8Name(name string) string {
-	if utf8.ValidString(name) {
-		return name
-	}
-	decoded, err := simplifiedchinese.GB18030.NewDecoder().String(name)
-	if err != nil || !utf8.ValidString(decoded) {
-		return strings.ToValidUTF8(name, "_")
-	}
-	return decoded
-}
-
 func (x *extractor) sevenZip(r io.ReaderAt, size int64) error {
 	if err := checkSevenZipLimits(r, size); err != nil {
 		return wrap("", err)
 	}
-	zr, err := OpenSevenZip(r, size)
+	zr, err := openSevenZip(r, size)
 	if err != nil {
 		return wrap("", err)
 	}
@@ -339,15 +293,17 @@ func (x *extractor) entry(name string, isDir bool, open func() (io.ReadCloser, e
 	if rel == "" {
 		return nil
 	}
-	target := filepath.Join(x.dest, filepath.FromSlash(rel))
+	target := filepath.FromSlash(rel)
 	if isDir {
-		if err := os.MkdirAll(target, 0o750); err != nil {
+		if err := x.root.MkdirAll(target, 0o750); err != nil {
 			return wrap(name, err)
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-		return wrap(name, err)
+	if dir := filepath.Dir(target); dir != "." {
+		if err := x.root.MkdirAll(dir, 0o750); err != nil {
+			return wrap(name, err)
+		}
 	}
 	src, err := open()
 	if err != nil {
@@ -359,7 +315,7 @@ func (x *extractor) entry(name string, isDir bool, open func() (io.ReadCloser, e
 
 func (x *extractor) write(name, target string, src io.Reader, wantCRC *uint32) error {
 	// O_EXCL refuses to write through an existing symlink or over a duplicate.
-	out, err := fsx.CreateExcl(target, 0o600)
+	out, err := x.root.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return wrap(name, err)
 	}
@@ -392,7 +348,7 @@ func (x *extractor) write(name, target string, src io.Reader, wantCRC *uint32) e
 // admit counts the entry and returns its clean slash-separated path, or ""
 // for an entry naming the destination itself.
 func (x *extractor) admit(name string, isDir bool) (string, error) {
-	rel, err := cleanName(name)
+	rel, err := cleanName(name, x.opts)
 	if err != nil {
 		return "", &Error{Entry: name, Reason: err}
 	}
@@ -418,45 +374,4 @@ func (x *extractor) admit(name string, isDir bool) (string, error) {
 		x.files[rel] = true
 	}
 	return rel, nil
-}
-
-func cleanName(name string) (string, error) {
-	name = strings.ReplaceAll(name, `\`, "/")
-	if strings.ContainsRune(name, 0) {
-		return "", ErrUnsafeName
-	}
-	if strings.HasPrefix(name, "/") {
-		return "", ErrTraversal
-	}
-	var segs []string
-	for s := range strings.SplitSeq(name, "/") {
-		switch s {
-		case "", ".":
-			continue
-		case "..":
-			return "", ErrTraversal
-		}
-		if !winname.Valid(s) {
-			return "", ErrUnsafeName
-		}
-		segs = append(segs, s)
-	}
-	return path.Join(segs...), nil
-}
-
-// wrap types a library or filesystem error as an *Error. Filesystem errors
-// stay in the chain, so errors.Is(err, syscall.ENOSPC) reports a full disk.
-func wrap(entry string, err error) error {
-	if _, typed := errors.AsType[*Error](err); typed {
-		return err
-	}
-	var re *sevenzip.ReadError
-	switch {
-	case errors.Is(err, zip.ErrChecksum), errors.Is(err, rardecode.ErrBadFileChecksum), errors.Is(err, gzip.ErrChecksum),
-		errors.Is(err, zstd.ErrCRCMismatch):
-		err = ErrChecksum
-	case errors.As(err, &re) && re.Encrypted:
-		err = ErrEncrypted
-	}
-	return &Error{Entry: entry, Reason: err}
 }
