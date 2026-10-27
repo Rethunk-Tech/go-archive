@@ -1,60 +1,54 @@
-# go-archive
+<h1 align="center">go-archive</h1>
 
-Package `archive`, module `github.com/Rethunk-Tech/go-archive`: one reader for untrusted archives,
-with exactly one consumer. Magic bytes pick the format — zip, RAR 4 and RAR 5, 7z, tar, and gzip,
-xz, lzma, zstd or bzip2, alone or wrapped around a tar. The extension is never consulted.
+<div align="center">
 
-`Extract` validates and enumerates with policy. It refuses traversal, unsafe names, case collisions,
-links, special files, encryption and every cap breach, stops at the first error, and leaves the
-partial tree behind. It takes a `*os.Root` the caller opened rather than a path, and the destination
-directory must already exist, because `os.OpenRoot` fails on a missing one.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.27.3+-00ADD8?logo=go&logoColor=white)](go.mod)
 
-`Lister` only bounds decompression and knows nothing about extraction policy: entry counts,
-truncation and name acceptability are the caller's. It is forward-only, as the formats are — `Open`
-is valid only until the next `Next`, `Next` ends with `io.EOF`, and `Close` is idempotent and never
-closes the caller's `Source`. Reading an entry is optional; `Entry.Name` normalises `\` to `/` and
-drops a trailing `/`.
+</div>
 
-`ListerOptions.MaxEntryBytes` of zero means 256 MiB, deliberately tight: a caller that needs more
-must say so. Zero `Options` fields take the `Default*` caps. Go 1.27.3+; `src` is a `Source`, `size` its length.
+---
 
-## Extract
+One reader for untrusted archives, as a single Go package: `archive`, module
+`github.com/Rethunk-Tech/go-archive`.
 
-```go
-func extract(src archive.Source, size int64, baseName, dest string) error {
-	root, err := os.OpenRoot(dest) // dest must exist
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	return archive.Extract(src, size, baseName, root, archive.Options{})
-}
+Magic bytes pick the format, never the file extension. Nine are read: zip, RAR 4, RAR 5, 7z, tar,
+and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar. Archives arrive from the
+internet with no trust attached, so every reader here is bounded in memory and in bytes before it
+produces output.
+
+The module has one consumer and exports only what that consumer calls.
+
+## Quick start
+
+```bash
+go get github.com/Rethunk-Tech/go-archive
 ```
 
-## List
+Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.md).
 
-```go
-func list(src archive.Source, size int64, baseName string) error {
-	l, err := archive.NewLister(src, size, baseName, archive.ListerOptions{MaxEntryBytes: 8 << 30})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = l.Close() }()
-	for {
-		e, err := l.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !e.IsDir {
-			fmt.Println(e.Name, e.Size)
-		}
-	}
-}
-```
+## Features
 
-## Licence
+- Nine formats behind one detector that reads magic bytes, so a renamed file still opens correctly.
+- `Extract` enforces policy: path traversal, unsafe names, case collisions, symlinks and hardlinks,
+  device and pipe entries, encryption, and the entry, entry-size, total-size and ratio caps.
+- `Lister` walks entries forward-only and applies no extraction policy, for callers that want names
+  and sizes only.
+- Writes travel through a caller-supplied `*os.Root`, so no entry resolves outside the destination.
+- Decoder windows are capped independently of entry sizes, so a crafted header cannot force a
+  multi-gigabyte allocation.
+- Fuzzed against every format, with the crash corpus committed.
 
-MIT. See `LICENSE`.
+## Documentation
+
+| Doc | Audience |
+| --- | --- |
+| [HUMANS.md](HUMANS.md) | Running and using the package |
+| [AGENTS.md](AGENTS.md) | Internals, invariants, and why |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Process — commits, tests, docs |
+| [SECURITY.md](SECURITY.md) | Vulnerability disclosure |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+
+## License
+
+MIT — see [LICENSE](LICENSE). © 2026 Rethunk Technologies
