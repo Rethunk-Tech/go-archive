@@ -7,14 +7,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
-
-	"github.com/Rethunk-Tech/mortar/internal/fsx"
 )
 
 // zentry is one zip entry; a name ending in "/" is a directory, a zero mode a regular file.
@@ -50,16 +49,37 @@ func buildZip(t *testing.T, entries ...zentry) string {
 func writeTemp(t *testing.T, name string, b []byte) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name)
-	if err := fsx.WriteFile(p, b, 0o600); err != nil {
+	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-func extract(t *testing.T, archive string, opts options) (string, error) {
+func extractDir(t *testing.T, archive string, opts Options) (string, error) {
 	t.Helper()
 	dest := t.TempDir()
-	return dest, extractWith(archive, dest, opts)
+	return dest, extractWith(t, archive, dest, opts)
+}
+
+// extractWith extracts archive into the existing directory dest, which is the
+// precondition os.OpenRoot carries.
+func extractWith(t *testing.T, archive, dest string, opts Options) error {
+	t.Helper()
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return Extract(f, info.Size(), filepath.Base(archive), root, opts)
 }
 
 func wantReason(t *testing.T, err, reason error, entry string) {
@@ -75,7 +95,7 @@ func wantReason(t *testing.T, err, reason error, entry string) {
 
 func readFile(t *testing.T, p string) string {
 	t.Helper()
-	b, err := fsx.ReadFile(p)
+	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +119,7 @@ func TestValidExtractsAndNormalisesModes(t *testing.T) {
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			dest, err := extract(t, p, options{})
+			dest, err := extractDir(t, p, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,7 +140,7 @@ func TestValidExtractsAndNormalisesModes(t *testing.T) {
 			}
 		})
 	}
-	dest, _ := extract(t, "testdata/valid.7z", options{})
+	dest, _ := extractDir(t, "testdata/valid.7z", Options{})
 	if got := readFile(t, filepath.Join(dest, "a.txt")); got != "hello mortar\n" {
 		t.Fatalf("7z content = %q", got)
 	}
@@ -151,17 +171,17 @@ func TestUnsafeEntriesRejected(t *testing.T) {
 	for _, c := range cases {
 		t.Run("zip "+c.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := extract(t, buildZip(t, zentry{name: c.entry, body: "x"}), options{})
+			_, err := extractDir(t, buildZip(t, zentry{name: c.entry, body: "x"}), Options{})
 			wantReason(t, err, c.reason, c.entry)
 		})
 		t.Run("rar "+c.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := extract(t, buildRar(t, rarFile{name: c.entry, data: "x"}), options{})
+			_, err := extractDir(t, buildRar(t, rarFile{name: c.entry, data: "x"}), Options{})
 			wantReason(t, err, c.reason, c.entry)
 		})
 	}
 	for _, p := range []string{"testdata/traversal.7z", "testdata/absolute.7z"} {
-		_, err := extract(t, p, options{})
+		_, err := extractDir(t, p, Options{})
 		var e *Error
 		if !errors.As(err, &e) || !errors.Is(err, ErrTraversal) {
 			t.Fatalf("%s: got %v", p, err)
@@ -176,7 +196,7 @@ func TestNothingWrittenOutsideDest(t *testing.T) {
 	if err := os.Mkdir(dest, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	err := Extract(buildZip(t, zentry{name: "../evil", body: "x"}), dest)
+	err := extractWith(t, buildZip(t, zentry{name: "../evil", body: "x"}), dest, Options{})
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -185,53 +205,99 @@ func TestNothingWrittenOutsideDest(t *testing.T) {
 	}
 }
 
+// The name check refuses the traversal before the root sees it, so this asserts
+// the second layer holds on its own: a path the root is handed directly cannot
+// reach outside it either.
+func TestRootRefusesAPathThatEscapesIt(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "dest")
+	if err := os.Mkdir(dest, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	for _, rel := range []string{"../escape.txt", filepath.FromSlash("/escape.txt")} {
+		if _, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+			t.Fatalf("root accepted %q", rel)
+		}
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "dest" {
+		t.Fatalf("root wrote outside dest: %v", entries)
+	}
+}
+
 func TestLinksAndSpecialFilesRejected(t *testing.T) {
 	t.Parallel()
-	_, err := extract(t, buildZip(t, zentry{name: "l", body: "target", mode: os.ModeSymlink | 0o777}), options{})
+	_, err := extractDir(t, buildZip(t, zentry{name: "l", body: "target", mode: os.ModeSymlink | 0o777}), Options{})
 	wantReason(t, err, ErrLink, "l")
-	_, err = extract(t, buildZip(t, zentry{name: "d", mode: os.ModeDevice | 0o666}), options{})
+	_, err = extractDir(t, buildZip(t, zentry{name: "d", mode: os.ModeDevice | 0o666}), Options{})
 	wantReason(t, err, ErrSpecialFile, "d")
-	_, err = extract(t, buildZip(t, zentry{name: "p", mode: os.ModeNamedPipe | 0o666}), options{})
+	_, err = extractDir(t, buildZip(t, zentry{name: "p", mode: os.ModeNamedPipe | 0o666}), Options{})
 	wantReason(t, err, ErrSpecialFile, "p")
-	_, err = extract(t, "testdata/symlink.7z", options{})
+	_, err = extractDir(t, "testdata/symlink.7z", Options{})
 	wantReason(t, err, ErrLink, "link")
-	_, err = extract(t, buildRar(t, rarFile{name: "l", symlinkTo: "a"}), options{})
+	_, err = extractDir(t, buildRar(t, rarFile{name: "l", symlinkTo: "a"}), Options{})
 	wantReason(t, err, ErrLink, "l")
 }
 
 func TestCaseCollision(t *testing.T) {
 	t.Parallel()
-	_, err := extract(t, buildZip(t, zentry{name: "Mod/a.txt", body: "1"}, zentry{name: "mod/b.txt", body: "2"}), options{})
+	_, err := extractDir(t, buildZip(t, zentry{name: "Mod/a.txt", body: "1"}, zentry{name: "mod/b.txt", body: "2"}), Options{})
 	wantReason(t, err, ErrCaseCollision, "mod/b.txt")
-	_, err = extract(t, buildZip(t, zentry{name: "a.txt", body: "1"}, zentry{name: "a.txt", body: "2"}), options{})
+	_, err = extractDir(t, buildZip(t, zentry{name: "a.txt", body: "1"}, zentry{name: "a.txt", body: "2"}), Options{})
 	wantReason(t, err, ErrCaseCollision, "a.txt")
-	_, err = extract(t, buildRar(t, rarFile{name: "A", data: "1"}, rarFile{name: "a", data: "2"}), options{})
+	_, err = extractDir(t, buildRar(t, rarFile{name: "A", data: "1"}, rarFile{name: "a", data: "2"}), Options{})
 	wantReason(t, err, ErrCaseCollision, "a")
 }
 
 func TestCaps(t *testing.T) {
 	t.Parallel()
 	big := string(make([]byte, 100))
-	_, err := extract(t, buildZip(t, zentry{name: "big", body: big}), options{MaxEntryBytes: 99})
+	_, err := extractDir(t, buildZip(t, zentry{name: "big", body: big}), Options{MaxEntryBytes: 99})
 	wantReason(t, err, ErrEntryTooLarge, "big")
-	if _, err := extract(t, buildZip(t, zentry{name: "big", body: big}), options{MaxEntryBytes: 100}); err != nil {
+	if _, err := extractDir(t, buildZip(t, zentry{name: "big", body: big}), Options{MaxEntryBytes: 100}); err != nil {
 		t.Fatalf("entry at the cap: %v", err)
 	}
-	_, err = extract(t, buildZip(t, zentry{name: "a", body: big}, zentry{name: "b", body: big}), options{MaxTotalBytes: 150})
+	_, err = extractDir(t, buildZip(t, zentry{name: "a", body: big}, zentry{name: "b", body: big}), Options{MaxTotalBytes: 150})
 	wantReason(t, err, ErrArchiveTooLarge, "b")
-	_, err = extract(t, buildZip(t, zentry{name: "a", body: "1"}, zentry{name: "b", body: "1"}, zentry{name: "c", body: "1"}), options{MaxEntries: 2})
+	_, err = extractDir(t, buildZip(t, zentry{name: "a", body: "1"}, zentry{name: "b", body: "1"}, zentry{name: "c", body: "1"}), Options{MaxEntries: 2})
 	wantReason(t, err, ErrTooManyEntries, "")
-	_, err = extract(t, buildRar(t, rarFile{name: "big", data: big}), options{MaxEntryBytes: 50})
+	_, err = extractDir(t, buildRar(t, rarFile{name: "big", data: big}), Options{MaxEntryBytes: 50})
 	wantReason(t, err, ErrEntryTooLarge, "big")
-	_, err = extract(t, "testdata/valid.7z", options{MaxEntryBytes: 5})
+	_, err = extractDir(t, "testdata/valid.7z", Options{MaxEntryBytes: 5})
 	wantReason(t, err, ErrEntryTooLarge, "a.txt")
+}
+
+// An over-counted container is refused before anything is written, so the
+// refusal leaves no partial tree behind.
+func TestOverCountedContainerIsRefusedBeforeWriting(t *testing.T) {
+	t.Parallel()
+	dest, err := extractDir(t,
+		buildZip(t, zentry{name: "a", body: "1"}, zentry{name: "b", body: "1"}, zentry{name: "c", body: "1"}),
+		Options{MaxEntries: 2})
+	wantReason(t, err, ErrTooManyEntries, "")
+	entries, readErr := os.ReadDir(dest)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("refused container still wrote %v", entries)
+	}
 }
 
 func TestCapCountsActualBytesNotDeclared(t *testing.T) {
 	t.Parallel()
 	// Declare 1 byte in the local header and central directory, store 100.
 	p := buildZip(t, zentry{name: "big", body: string(make([]byte, 100))})
-	b, err := fsx.ReadFile(p)
+	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +309,7 @@ func TestCapCountsActualBytesNotDeclared(t *testing.T) {
 		}
 		binary.LittleEndian.PutUint32(b[off:], 1)
 	}
-	_, err = extract(t, writeTemp(t, "lie.zip", b), options{MaxEntryBytes: 10})
+	_, err = extractDir(t, writeTemp(t, "lie.zip", b), Options{MaxEntryBytes: 10})
 	if _, ok := errors.AsType[*Error](err); !ok {
 		t.Fatalf("got %v", err)
 	}
@@ -256,7 +322,7 @@ func TestChecksumMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	zb[bytes.Index(zb, []byte("payload"))] ^= 0xff
-	_, err = extract(t, writeTemp(t, "bad.zip", zb), options{})
+	_, err = extractDir(t, writeTemp(t, "bad.zip", zb), Options{})
 	wantReason(t, err, ErrChecksum, "f")
 
 	sb, err := os.ReadFile("testdata/valid.7z")
@@ -264,7 +330,7 @@ func TestChecksumMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	sb[bytes.Index(sb, []byte("hello mortar"))] ^= 0xff
-	_, err = extract(t, writeTemp(t, "bad.7z", sb), options{})
+	_, err = extractDir(t, writeTemp(t, "bad.7z", sb), Options{})
 	wantReason(t, err, ErrChecksum, "a.txt")
 
 	rb, err := os.ReadFile(buildRar(t, rarFile{name: "f", data: "payload"}))
@@ -272,19 +338,19 @@ func TestChecksumMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb[bytes.Index(rb, []byte("payload"))] ^= 0xff
-	_, err = extract(t, writeTemp(t, "bad.rar", rb), options{})
+	_, err = extractDir(t, writeTemp(t, "bad.rar", rb), Options{})
 	wantReason(t, err, ErrChecksum, "f")
 }
 
 func TestEncryptedRejected(t *testing.T) {
 	t.Parallel()
 	for _, p := range []string{"testdata/encrypted.7z", "testdata/encrypted-headers.7z"} {
-		_, err := extract(t, p, options{})
+		_, err := extractDir(t, p, Options{})
 		if !errors.Is(err, ErrEncrypted) {
 			t.Fatalf("%s: got %v", p, err)
 		}
 	}
-	_, err := extract(t, buildRar(t, rarFile{name: "f", data: "x", encrypted: true}), options{})
+	_, err := extractDir(t, buildRar(t, rarFile{name: "f", data: "x", encrypted: true}), Options{})
 	wantReason(t, err, ErrEncrypted, "f")
 
 	var buf bytes.Buffer
@@ -297,7 +363,7 @@ func TestEncryptedRejected(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = extract(t, writeTemp(t, "enc.zip", buf.Bytes()), options{})
+	_, err = extractDir(t, writeTemp(t, "enc.zip", buf.Bytes()), Options{})
 	wantReason(t, err, ErrEncrypted, "f")
 }
 
@@ -307,10 +373,10 @@ func TestFormatDetectionIgnoresExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := extract(t, writeTemp(t, "mod.zip", b), options{}); err != nil {
+	if _, err := extractDir(t, writeTemp(t, "mod.zip", b), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = extract(t, writeTemp(t, "mod.zip", []byte("not an archive")), options{})
+	_, err = extractDir(t, writeTemp(t, "mod.zip", []byte("not an archive")), Options{})
 	wantReason(t, err, ErrUnsupportedFormat, "")
 }
 
@@ -349,13 +415,13 @@ func TestDecoderMemoryHeadersRejected(t *testing.T) {
 			runtime.GC()
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			_, err := extract(t, tc.archive, options{})
+			_, err := extractDir(t, tc.archive, Options{})
 			runtime.ReadMemStats(&after)
 			t.Logf("HeapSys delta=%d TotalAlloc delta=%d", after.HeapSys-before.HeapSys, after.TotalAlloc-before.TotalAlloc)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an archive error containing %q", err, tc.want)
 			}
-			if delta := after.TotalAlloc - before.TotalAlloc; delta >= uint64(MaxDecoderBytes) {
+			if delta := after.TotalAlloc - before.TotalAlloc; delta >= uint64(maxDecoderBytes) {
 				t.Fatalf("decoder allocated %d bytes before refusing the header", delta)
 			}
 		})
@@ -487,7 +553,7 @@ func buildRar(t *testing.T, files ...rarFile) string {
 func TestZipNamesInALegacyEncodingBecomeUTF8(t *testing.T) {
 	t.Parallel()
 	// GBK bytes for a left curly quote, as a Chinese-locale zip tool writes them without the UTF-8 flag.
-	dest, err := extract(t, buildZip(t, zentry{name: "[FS]Kyuya\xa1\xaes hats Pack/manifest.json", body: "{}"}), options{})
+	dest, err := extractDir(t, buildZip(t, zentry{name: "[FS]Kyuya\xa1\xaes hats Pack/manifest.json", body: "{}"}), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,19 +568,23 @@ func TestStreamFormatsExtractATarByMagicBytes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// A copy with no extension: only the bytes may decide.
-			src, err := fsx.ReadFile(filepath.Join("testdata", name))
+			src, err := os.ReadFile(filepath.Join("testdata", name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			dest, err := extract(t, writeTemp(t, "download", src), options{})
+			dest, err := extractDir(t, writeTemp(t, "download", src), Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := readFile(t, filepath.Join(dest, "Mod", "Fix.dll")); got != "dll" {
 				t.Fatalf("Fix.dll = %q", got)
 			}
-			if _, err := PreviewArchive(writeTemp(t, "download", src)); err != nil {
-				t.Fatal(err)
+			listed, err := listNames(writeTemp(t, "download", src))
+			if err != nil {
+				t.Fatalf("listing: %v", err)
+			}
+			if len(listed) == 0 || listed[0] != "Mod" {
+				t.Fatalf("listing = %v", listed)
 			}
 		})
 	}
@@ -525,14 +595,14 @@ func TestStreamFormatsExtractABareFileNamedWithoutItsSuffix(t *testing.T) {
 	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			dest, err := extract(t, filepath.Join("testdata", name), options{})
+			dest, err := extractDir(t, filepath.Join("testdata", name), Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := readFile(t, filepath.Join(dest, "bare.txt")); got != "hello archive\n" {
 				t.Fatalf("bare.txt = %q", got)
 			}
-			if n, err := DeclaredSize(filepath.Join("testdata", name)); err != nil || n != 14 {
+			if n, err := declaredSize(t, filepath.Join("testdata", name)); err != nil || n != 14 {
 				t.Fatalf("DeclaredSize = %d, %v", n, err)
 			}
 		})
@@ -546,7 +616,7 @@ func TestStreamFormatsRefuseUnsafeEntries(t *testing.T) {
 	} {
 		t.Run(file, func(t *testing.T) {
 			t.Parallel()
-			_, err := extract(t, filepath.Join("testdata", file), options{})
+			_, err := extractDir(t, filepath.Join("testdata", file), Options{})
 			if !errors.Is(err, reason) {
 				t.Fatalf("got %v, want %v", err, reason)
 			}
@@ -557,14 +627,14 @@ func TestStreamFormatsRefuseUnsafeEntries(t *testing.T) {
 func TestStreamFormatsHonourTheSizeAndEntryCaps(t *testing.T) {
 	t.Parallel()
 	src := filepath.Join("testdata", "valid.tar.xz")
-	_, err := extract(t, src, options{MaxEntryBytes: 2})
+	_, err := extractDir(t, src, Options{MaxEntryBytes: 2})
 	if !errors.Is(err, ErrEntryTooLarge) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err = extract(t, src, options{MaxEntries: 1}); !errors.Is(err, ErrTooManyEntries) {
+	if _, err = extractDir(t, src, Options{MaxEntries: 1}); !errors.Is(err, ErrTooManyEntries) {
 		t.Fatalf("got %v", err)
 	}
-	_, err = extract(t, filepath.Join("testdata", "bare.txt.gz"), options{MaxEntryBytes: 3})
+	_, err = extractDir(t, filepath.Join("testdata", "bare.txt.gz"), Options{MaxEntryBytes: 3})
 	wantReason(t, err, ErrEntryTooLarge, "bare.txt")
 }
 
@@ -579,51 +649,9 @@ func TestStreamBombIsStoppedByTheDecompressionBudget(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := extract(t, writeTemp(t, "bomb.gz", buf.Bytes()), options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 1 << 20, MaxEntries: 10})
+	_, err := extractDir(t, writeTemp(t, "bomb.gz", buf.Bytes()), Options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 1 << 20, MaxEntries: 10})
 	if !errors.Is(err, ErrEntryTooLarge) && !errors.Is(err, ErrArchiveTooLarge) {
 		t.Fatalf("got %v", err)
-	}
-}
-
-func TestExtensionsStripLongestEndingFirst(t *testing.T) {
-	t.Parallel()
-	for in, want := range map[string]string{
-		"Mod.TAR.GZ": "Mod", "mod.tgz": "mod", "mod.zip": "mod", "notes.txt.xz": "notes.txt", "plain": "plain", "mod.tar.zst": "mod",
-	} {
-		if got := StripExtension(in); got != want {
-			t.Errorf("StripExtension(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if HasExtension("readme.txt") || !HasExtension("a.tar.bz2") {
-		t.Error("HasExtension wrong")
-	}
-	if !strings.Contains(PickerPattern(), "*.tar.xz;") {
-		t.Error(PickerPattern())
-	}
-}
-
-func TestSavedNameKeepsABareFilesOriginalNameForExtraction(t *testing.T) {
-	t.Parallel()
-	saved := SavedName("0a1b2c", "notes.txt.gz")
-	if SavedID(saved) != "0a1b2c" || SavedID("0a1b2c.partial.json") != "0a1b2c.partial" {
-		t.Fatalf("SavedID = %q", SavedID(saved))
-	}
-	src, err := fsx.ReadFile(filepath.Join("testdata", "bare.txt.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dest, err := extract(t, writeTemp(t, saved, src), options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := readFile(t, filepath.Join(dest, "notes.txt")); got != "hello archive\n" {
-		t.Fatalf("notes.txt = %q", got)
-	}
-	if SavedName("id", "m.zip") != "id.zip" || SavedName("id", "m.tar.gz") != "id.gz" {
-		t.Fatal("only a bare compressed file keeps its name")
-	}
-	if got := SavedName("id", "a/b:c.xz"); got != "id~~b_c.xz" {
-		t.Fatalf("unsafe characters: %q", got)
 	}
 }
 
@@ -632,10 +660,10 @@ func TestDefaultCapsAreFarAboveRealPackagesAndDecoderMemoryStaysSmall(t *testing
 	if DefaultMaxTotalBytes != 64<<30 || DefaultMaxEntryBytes != 32<<30 || DefaultMaxEntries != 20000 {
 		t.Fatalf("caps are %d/%d/%d", DefaultMaxEntryBytes, DefaultMaxTotalBytes, DefaultMaxEntries)
 	}
-	if MaxDecoderBytes != 256<<20 || MaxDecoderBytes >= DefaultMaxEntryBytes {
-		t.Fatalf("decoder cap %d must not grow with the entry cap", MaxDecoderBytes)
+	if maxDecoderBytes != 256<<20 || maxDecoderBytes >= DefaultMaxEntryBytes {
+		t.Fatalf("decoder cap %d must not grow with the entry cap", maxDecoderBytes)
 	}
-	o := options{}.withDefaults()
+	o := Options{}.withDefaults()
 	if got := o.ratioCap(1 << 10); got != DefaultRatioFloor {
 		t.Fatalf("a tiny archive may unpack to %d, want the floor %d", got, DefaultRatioFloor)
 	}
@@ -658,11 +686,56 @@ func TestRatioGuardStopsATinyArchiveClaimingALot(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := writeTemp(t, "ratio.gz", buf.Bytes())
-	_, err := extract(t, src, options{MaxRatio: 10, RatioFloor: 1 << 10})
+	_, err := extractDir(t, src, Options{MaxRatio: 10, RatioFloor: 1 << 10})
 	if !errors.Is(err, ErrRatio) {
 		t.Fatalf("got %v, want ErrRatio", err)
 	}
-	if _, err := extract(t, src, options{MaxRatio: 10, RatioFloor: 16 << 20}); err != nil {
+	if _, err := extractDir(t, src, Options{MaxRatio: 10, RatioFloor: 16 << 20}); err != nil {
 		t.Fatalf("under the floor: %v", err)
 	}
+}
+
+// listNames drains a Lister over path and returns the names it reported,
+// normalised by Next.
+func listNames(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	l, err := NewLister(f, info.Size(), filepath.Base(path), ListerOptions{MaxEntryBytes: 8 << 20})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = l.Close() }()
+	var names []string
+	for {
+		e, err := l.Next()
+		if errors.Is(err, io.EOF) {
+			return names, nil
+		}
+		if err != nil {
+			return names, err
+		}
+		names = append(names, e.Name)
+	}
+}
+
+// declaredSize opens path and reports what its headers declare.
+func declaredSize(t *testing.T, path string) (int64, error) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return DeclaredSize(f, info.Size())
 }

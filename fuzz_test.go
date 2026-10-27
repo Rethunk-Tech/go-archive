@@ -4,15 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Rethunk-Tech/mortar/internal/fsx"
-
-	"github.com/Rethunk-Tech/mortar/internal/winname"
 )
 
 func FuzzCleanName(f *testing.F) {
@@ -20,7 +17,7 @@ func FuzzCleanName(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, name string) {
-		got, err := cleanName(name)
+		got, err := cleanName(name, Options{})
 		if err != nil {
 			if !errors.Is(err, ErrTraversal) && !errors.Is(err, ErrUnsafeName) {
 				t.Fatalf("untyped error for %q: %v", name, err)
@@ -60,7 +57,7 @@ func checkExtracted(t *testing.T, parent, dest string) {
 		if !d.Type().IsRegular() && !d.IsDir() {
 			t.Fatalf("extracted a %v at %s", d.Type(), p)
 		}
-		if !winname.Valid(d.Name()) {
+		if !WindowsSegment(d.Name()) {
 			t.Fatalf("extracted a name Windows would alter: %q", p)
 		}
 		rel, _ := filepath.Rel(dest, p)
@@ -76,6 +73,7 @@ func checkExtracted(t *testing.T, parent, dest string) {
 }
 
 func extractFuzzed(t *testing.T, archive []byte) {
+	t.Helper()
 	parent := t.TempDir()
 	dest, src := filepath.Join(parent, "dest"), filepath.Join(t.TempDir(), "in")
 	for _, d := range []string{dest, filepath.Join(parent, "sentinel")} {
@@ -88,17 +86,82 @@ func extractFuzzed(t *testing.T, archive []byte) {
 	}
 	// Small caps keep a crafted bomb from filling the disk; extraction may fail, but never outside dest.
 	// Listing and sizing read the same untrusted headers; they must fail, not panic.
-	_, _ = PreviewArchive(src)
-	_, _ = DeclaredSize(src)
-	_ = extractWith(src, dest, options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 4 << 20, MaxEntries: 200})
+	listFuzzed(t, src)
+	sizeFuzzed(t, src)
+	extractPath(t, src, dest)
 	checkExtracted(t, parent, dest)
+}
+
+// extractPath extracts src into the existing dest under the fuzz caps. A refusal
+// is the expected outcome for crafted input, so only a panic or a write outside
+// dest is a finding, and checkExtracted is what proves the latter.
+func extractPath(t *testing.T, src, dest string) {
+	t.Helper()
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	_ = Extract(f, info.Size(), filepath.Base(src), root, Options{
+		MaxEntryBytes: 1 << 20,
+		MaxTotalBytes: 4 << 20,
+		MaxEntries:    200,
+	})
+}
+
+// listFuzzed drives a Lister to exhaustion, which is the probe that used to be a
+// preview call: the same untrusted headers reach the same readers.
+func listFuzzed(t *testing.T, src string) {
+	t.Helper()
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := NewLister(f, info.Size(), filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
+	if err != nil {
+		return
+	}
+	defer func() { _ = l.Close() }()
+	for {
+		if _, err := l.Next(); err != nil {
+			return
+		}
+	}
+}
+
+func sizeFuzzed(t *testing.T, src string) {
+	t.Helper()
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = DeclaredSize(f, info.Size())
 }
 
 // FuzzExtract feeds raw bytes, seeded with every format's fixtures, through the format detection and readers.
 func FuzzExtract(f *testing.F) {
 	seeds, _ := filepath.Glob("testdata/*")
 	for _, p := range seeds {
-		if b, err := fsx.ReadFile(p); err == nil {
+		if b, err := os.ReadFile(p); err == nil {
 			f.Add(b)
 		}
 	}
@@ -170,9 +233,127 @@ func FuzzExtractStreams(f *testing.F) {
 	seeds, _ := filepath.Glob("testdata/*.tar*")
 	bare, _ := filepath.Glob("testdata/bare.*")
 	for _, p := range append(seeds, bare...) {
-		if b, err := fsx.ReadFile(p); err == nil {
+		if b, err := os.ReadFile(p); err == nil {
 			f.Add(b)
 		}
 	}
 	f.Fuzz(func(t *testing.T, archive []byte) { extractFuzzed(t, archive) })
+}
+
+// FuzzList asserts the Lister's own contract, which FuzzExtract cannot reach: every
+// name arrives normalised, the walk ends in io.EOF, and the two iteration forms
+// agree on both the entry count and the byte total.
+func FuzzList(f *testing.F) {
+	seeds, _ := filepath.Glob("testdata/*")
+	for _, p := range seeds {
+		if b, err := os.ReadFile(p); err == nil {
+			f.Add(b)
+		}
+	}
+	f.Add(zipOf(f, `dir\`, 0, []byte("x")))
+	f.Add(zipOf(f, "dir/", fs.ModeDir|0o755, nil))
+	f.Fuzz(func(t *testing.T, archive []byte) {
+		src := writeTemp(t, "listed", archive)
+		nextTotal, nextCount, nextErr := listByNext(t, src)
+		rangeTotal, rangeCount, rangeErr := listByEntries(t, src)
+		if (nextErr == nil) != (rangeErr == nil) {
+			t.Fatalf("Next: %v, Entries: %v", nextErr, rangeErr)
+		}
+		if nextErr != nil {
+			return
+		}
+		if nextCount != rangeCount {
+			t.Fatalf("Next saw %d entries, Entries saw %d", nextCount, rangeCount)
+		}
+		if nextTotal != rangeTotal {
+			t.Fatalf("Next totalled %d bytes, Entries totalled %d", nextTotal, rangeTotal)
+		}
+	})
+}
+
+// listByNext drains every entry through Next and Open, which is the form that
+// reports a listing's byte counts.
+func listByNext(t *testing.T, src string) (int64, int, error) {
+	t.Helper()
+	l, err := openLister(t, src)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = l.Close() }()
+	var total int64
+	var count int
+	for {
+		e, err := l.Next()
+		if errors.Is(err, io.EOF) {
+			return total, count, nil
+		}
+		if err != nil {
+			return total, count, err
+		}
+		if !normalised(e.Name) {
+			t.Fatalf("Next reported %q", e.Name)
+		}
+		count++
+		if e.IsDir {
+			continue
+		}
+		rc, err := l.Open()
+		if err != nil {
+			return total, count, err
+		}
+		n, err := io.Copy(io.Discard, rc)
+		_ = rc.Close()
+		if err != nil {
+			return total, count, err
+		}
+		total += n
+	}
+}
+
+// listByEntries drains the same archive through range-over-func.
+func listByEntries(t *testing.T, src string) (int64, int, error) {
+	t.Helper()
+	l, err := openLister(t, src)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = l.Close() }()
+	var total int64
+	var count int
+	for e, err := range l.Entries() {
+		if err != nil {
+			return total, count, err
+		}
+		if !normalised(e.Name) {
+			t.Fatalf("Entries reported %q", e.Name)
+		}
+		count++
+		total += e.Size
+	}
+	return total, count, nil
+}
+
+func openLister(t *testing.T, src string) (*Lister, error) {
+	t.Helper()
+	f, err := os.Open(src)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	l, err := NewLister(f, info.Size(), filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+// normalised reports whether name carries neither a backslash nor a trailing
+// slash, the shape Lister promises.
+func normalised(name string) bool {
+	return !strings.Contains(name, `\`) && !strings.HasSuffix(name, "/")
 }
