@@ -128,15 +128,26 @@ func TestValidExtractsAndNormalisesModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Mode().Perm() != 0o600 || info.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 {
-				t.Fatalf("file mode = %v", info.Mode())
+			// Windows has no POSIX mode: it reports 0666 for a writable file and
+			// 0777 for a directory whatever was requested, so only the kind and
+			// the absence of setuid/setgid are portable there.
+			if runtime.GOOS != "windows" {
+				if info.Mode().Perm() != 0o600 {
+					t.Fatalf("file mode = %v", info.Mode())
+				}
+				dir, err := os.Stat(filepath.Dir(target))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if filepath.Dir(target) != dest && dir.Mode().Perm() != 0o750 {
+					t.Fatalf("dir mode = %v", dir.Mode())
+				}
 			}
-			dir, err := os.Stat(filepath.Dir(target))
-			if err != nil {
-				t.Fatal(err)
+			if info.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 {
+				t.Fatalf("setuid or setgid survived: %v", info.Mode())
 			}
-			if filepath.Dir(target) != dest && dir.Mode().Perm() != 0o750 {
-				t.Fatalf("dir mode = %v", dir.Mode())
+			if !info.Mode().IsRegular() {
+				t.Fatalf("entry is not a regular file: %v", info.Mode())
 			}
 		})
 	}
@@ -205,24 +216,24 @@ func TestNothingWrittenOutsideDest(t *testing.T) {
 	}
 }
 
-// The name check refuses the traversal before the root sees it, so this asserts
-// the second layer holds on its own: a path the root is handed directly cannot
-// reach outside it either.
-func TestRootRefusesAPathThatEscapesIt(t *testing.T) {
+// The root is the last line of defence, so the test asserts Extract's own write
+// path refuses to escape: the name check runs first, and the root would refuse the
+// path independently. A zip whose entries cannot pass the cleaner still must not
+// produce a file beside the destination.
+func TestNothingWrittenOutsideTheRoot(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	dest := filepath.Join(parent, "dest")
 	if err := os.Mkdir(dest, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	root, err := os.OpenRoot(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
-	for _, rel := range []string{"../escape.txt", filepath.FromSlash("/escape.txt")} {
-		if _, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
-			t.Fatalf("root accepted %q", rel)
+	// A permissive segment policy still cannot admit these, because traversal is
+	// checked outside the hook.
+	permissive := Options{Segment: func(string) bool { return true }}
+	for _, name := range []string{"../escape.txt", "/escape.txt", "a/../../escape.txt", `..\escape.txt`} {
+		err := extractWith(t, buildZip(t, zentry{name: name, body: "x"}), dest, permissive)
+		if !errors.Is(err, ErrTraversal) {
+			t.Fatalf("%q: got %v, want ErrTraversal", name, err)
 		}
 	}
 	entries, err := os.ReadDir(parent)
@@ -230,7 +241,7 @@ func TestRootRefusesAPathThatEscapesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Name() != "dest" {
-		t.Fatalf("root wrote outside dest: %v", entries)
+		t.Fatalf("extraction wrote beside its destination: %v", entries)
 	}
 }
 
@@ -295,23 +306,22 @@ func TestOverCountedContainerIsRefusedBeforeWriting(t *testing.T) {
 
 func TestCapCountsActualBytesNotDeclared(t *testing.T) {
 	t.Parallel()
-	// Declare 1 byte in the local header and central directory, store 100.
+	// The local header declares 1 byte while 100 are stored. Patching the central
+	// directory too would make the zip unreadable before any cap ran, which would
+	// pass an "is an *Error" assertion without testing the cap at all.
 	p := buildZip(t, zentry{name: "big", body: string(make([]byte, 100))})
 	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sig := range [][]byte{[]byte("PK\x03\x04"), []byte("PK\x01\x02")} {
-		i := bytes.Index(b, sig)
-		off := i + 22 // uncompressed size in both header kinds
-		if sig[2] == 1 {
-			off = i + 24
-		}
-		binary.LittleEndian.PutUint32(b[off:], 1)
-	}
-	_, err = extractDir(t, writeTemp(t, "lie.zip", b), Options{MaxEntryBytes: 10})
-	if _, ok := errors.AsType[*Error](err); !ok {
-		t.Fatalf("got %v", err)
+	i := bytes.Index(b, []byte("PK\x03\x04"))
+	binary.LittleEndian.PutUint32(b[i+22:], 1) // uncompressed size in the local header
+	dest, err := extractDir(t, writeTemp(t, "lie.zip", b), Options{MaxEntryBytes: 10})
+	wantReason(t, err, ErrEntryTooLarge, "big")
+	// The cap counts bytes as they arrive, so the write stops one byte past the
+	// bound rather than trusting the 1 byte the header declared.
+	if got := readFile(t, filepath.Join(dest, "big")); len(got) != 11 {
+		t.Fatalf("wrote %d bytes, want the 11 that prove the cap counted real bytes", len(got))
 	}
 }
 

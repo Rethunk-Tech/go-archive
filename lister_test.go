@@ -2,12 +2,14 @@ package archive
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -242,6 +244,55 @@ func TestListerMaxEntryBytesStopsAStreamBomb(t *testing.T) {
 	}
 }
 
+// A listing has no entry cap, so a large archive lists to the end rather than
+// being refused for counting.
+func TestListerHasNoEntryCap(t *testing.T) {
+	t.Parallel()
+	entries := make([]zentry, 0, 64)
+	for i := range 64 {
+		entries = append(entries, zentry{name: "f" + strconv.Itoa(i) + ".txt", body: "x"})
+	}
+	l := openZipLister(t, entries...)
+	if got := len(names(t, l)); got != 64 {
+		t.Fatalf("listed %d entries, want 64", got)
+	}
+}
+
+// The per-entry bound is what a caller sets, so an archive of many legitimate
+// entries inside that bound lists to the end. A whole-listing budget of one
+// entry's allowance would stop such an archive partway.
+func TestListerListsManyEntriesInsideThePerEntryBound(t *testing.T) {
+	t.Parallel()
+	// Together these are an order of magnitude past the 1 MiB per-entry bound,
+	// while no single entry comes near it, so only an aggregate budget sized from
+	// the per-entry allowance can refuse the archive.
+	const entries, size = 300, 256 << 10
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := bytes.Repeat([]byte("a"), size)
+	for i := range entries {
+		h := &tar.Header{
+			Typeflag: tar.TypeReg,
+			Name:     "d/" + strconv.Itoa(i) + ".bin",
+			Mode:     0o644,
+			Size:     size,
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l := openListerPath(t, writeTemp(t, "many.tar", buf.Bytes()), ListerOptions{MaxEntryBytes: 1 << 20})
+	if got := names(t, l); len(got) != entries {
+		t.Fatalf("listed %d of %d entries", len(got), entries)
+	}
+}
+
 func TestListerUnsupportedFormat(t *testing.T) {
 	t.Parallel()
 	_, err := openListerOpts(t, writeTemp(t, "plain", []byte("not an archive")), ListerOptions{})
@@ -286,13 +337,26 @@ func TestListerCloseIsIdempotentAndLeavesTheSourceOpen(t *testing.T) {
 }
 
 // A listing keeps a name Extract refuses: encryption is extraction's policy, and
-// a caller previewing a pack needs to see what is inside it.
+// a caller previewing a pack needs to see what is inside it. The zip case is the
+// one the plan names, because the zip walk never reads the encrypted flag.
 func TestListerReportsAnEncryptedEntryThatExtractRefuses(t *testing.T) {
 	t.Parallel()
-	path := "testdata/encrypted.7z"
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "secret.txt", Method: zip.Store, Flags: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := writeTemp(t, "enc.zip", buf.Bytes())
 	got := names(t, openListerPath(t, path, ListerOptions{}))
-	if len(got) == 0 {
-		t.Fatal("listing reported no entries for an encrypted archive")
+	if len(got) != 1 || got[0].Name != "secret.txt" {
+		t.Fatalf("listed %+v, want the encrypted entry named", got)
 	}
 	if _, err := extractDir(t, path, Options{}); !errors.Is(err, ErrEncrypted) {
 		t.Fatalf("Extract = %v, want ErrEncrypted", err)

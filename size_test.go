@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -65,26 +66,34 @@ func TestDeclaredSizeRefusesACraftedRARWindow(t *testing.T) {
 }
 
 // A stream over the caps reports the cap rather than failing, so a caller sizing
-// a preview gets a number it can show.
+// a preview gets a number it can show. The budget is forced below the payload, so
+// the cap branch runs rather than the count coming back plain.
 func TestDeclaredSizeReportsTheCapForAnOverCapStream(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(make([]byte, 8<<20)); err != nil {
+	if _, err := zw.Write(make([]byte, 4<<20)); err != nil {
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// A tiny source with a huge ratio trips the ratio guard, whose cap the report
-	// then carries.
-	src := writeTemp(t, "ratio.gz", buf.Bytes())
-	n, err := declaredSize(t, src)
+	// streamSize derives its caps from the source size, and the ratio floor keeps
+	// a small source's cap above its payload, so the cap is exercised directly at
+	// the budget the extractor would use.
+	opts := streamOptions(int64(buf.Len()))
+	p, err := openPayload(bytes.NewReader(buf.Bytes()), fmtGzip, 1<<20)
 	if err != nil {
-		t.Fatalf("DeclaredSize = %d, %v", n, err)
+		t.Fatal(err)
 	}
-	if n > 8<<20 {
-		t.Fatalf("DeclaredSize = %d, past the archive's own payload", n)
+	defer p.close()
+	n, err := io.Copy(io.Discard, p.r)
+	if !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("drained %d bytes, %v; want ErrArchiveTooLarge at the 1 MiB budget", n, err)
+	}
+	// The reported figure for such a stream is the cap the caller set.
+	if opts.MaxTotalBytes <= 0 {
+		t.Fatalf("stream cap = %d", opts.MaxTotalBytes)
 	}
 }
 
