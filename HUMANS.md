@@ -70,8 +70,12 @@ stream formats cannot be listed without decompressing them.
 
 The walk is forward-only, because the formats are. `Open` is valid only until the next `Next`, which
 returns `io.EOF` at the end. `Close` is idempotent and never closes the `Source` you passed in.
-Reading an entry is optional: skipping it still enumerates and sizes it correctly. `Entry.Name` is
-normalised, with `\` becoming `/` and a trailing `/` dropped.
+`Entry.Name` is normalised, with `\` becoming `/` and a trailing `/` dropped.
+
+Reading an entry is optional, and skipping one is cheaper than reading it. A skipped entry reports the
+size its header declared, which an archive can set to anything; a bare compressed stream declares none
+and reports `-1`. Use `Entries()` when you need the bytes actually there, since it drains each entry
+and reports the real count.
 
 ## Caps
 

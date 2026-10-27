@@ -118,8 +118,8 @@ func extractPath(t *testing.T, src, dest string) {
 	})
 }
 
-// listFuzzed drives a Lister to exhaustion, which is the probe that used to be a
-// preview call: the same untrusted headers reach the same readers.
+// listFuzzed drives a Lister to exhaustion, so a crafted header reaches the same
+// readers a preview would and must fail rather than panic.
 func listFuzzed(t *testing.T, src string) {
 	t.Helper()
 	f, err := os.Open(src)
