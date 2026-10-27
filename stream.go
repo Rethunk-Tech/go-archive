@@ -1,7 +1,6 @@
 package archive
 
 import (
-	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/bzip2"
@@ -20,12 +19,19 @@ import (
 // headLen is how much of a file's start detect reads: enough for the "ustar" marker at offset 257 of a tar header.
 const headLen = 262
 
-// dictLimit caps a decompressor's window, so a header cannot make it allocate more than MaxDecoderBytes.
-const dictLimit = MaxDecoderBytes
+// dictLimit caps a decompressor's window, so a header cannot make it allocate more than maxDecoderBytes.
+const dictLimit = maxDecoderBytes
 
 // tarOverhead is what a tar adds around each entry's bytes (header, padding), counted into the stream's budget so
 // skipped or unread data cannot decompress without bound.
 const tarOverhead = 1536
+
+// streamBudget is the most a stream may decompress for a payload allowance: the allowance itself, the tar headers
+// that can sit around it, and a megabyte for the peek. A tar's headers are not payload, so counting them against the
+// allowance would stop a legitimate archive short of it.
+func streamBudget(payload int64, entries int) int64 {
+	return payload + int64(entries)*tarOverhead + 1<<20
+}
 
 // looksLikeLZMA recognises the classic .lzma header, which has no magic: valid properties, a dictionary size an
 // encoder would write (a power of two, or one and a half of one) and an unknown or sane uncompressed size.
@@ -64,17 +70,19 @@ func isTarHeader(head []byte) bool {
 	return len(head) >= 262 && bytes.Equal(head[257:262], []byte("ustar"))
 }
 
-// capReader fails with ErrArchiveTooLarge once more than its budget has been read, whatever the stream claims.
-type capReader struct {
-	r    io.Reader
-	left int64
+// limitReader fails with reason once more than its budget has been read,
+// whatever the stream claims.
+type limitReader struct {
+	r      io.Reader
+	left   int64
+	reason error
 }
 
-func (c *capReader) Read(p []byte) (int, error) {
+func (c *limitReader) Read(p []byte) (int, error) {
 	if c.left <= 0 {
 		var one [1]byte
 		if n, err := c.r.Read(one[:]); n > 0 {
-			return 0, &Error{Reason: ErrArchiveTooLarge}
+			return 0, &Error{Reason: c.reason}
 		} else if err != nil {
 			return 0, err
 		}
@@ -88,6 +96,19 @@ func (c *capReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Close releases the reader underneath, so a bound can wrap one directly.
+func (c *limitReader) Close() error {
+	if rc, ok := c.r.(io.Closer); ok {
+		return rc.Close()
+	}
+	return nil
+}
+
+// capReader bounds a whole stream's decompressed output.
+func capReader(r io.Reader, budget int64) *limitReader {
+	return &limitReader{r: r, left: budget, reason: ErrArchiveTooLarge}
+}
+
 // payload is the decompressed bytes of a stream format, positioned at the start, and whether they are a tar.
 type payload struct {
 	r     *bufio.Reader
@@ -95,8 +116,11 @@ type payload struct {
 	close func()
 }
 
-// openPayload decompresses r (already at the file's start) as kind, within the extraction caps.
-func openPayload(r io.Reader, kind int, opts Options) (*payload, error) {
+// openPayload decompresses r (already at the file's start) as kind, allowing
+// budget bytes of decompressed output. The cap goes on the decoder here rather
+// than on what comes out of it, so a stream bomb stops at the bound instead of
+// decompressing unbounded and being rejected afterwards.
+func openPayload(r io.Reader, kind int, budget int64) (*payload, error) {
 	closeFn := func() {}
 	var plain io.Reader
 	switch kind {
@@ -132,8 +156,7 @@ func openPayload(r io.Reader, kind int, opts Options) (*payload, error) {
 	case fmtBzip2:
 		plain = bzip2.NewReader(r)
 	}
-	budget := opts.MaxTotalBytes + int64(opts.MaxEntries)*tarOverhead + 1<<20
-	br := bufio.NewReaderSize(&capReader{r: plain, left: budget}, 4096)
+	br := bufio.NewReaderSize(capReader(plain, budget), 4096)
 	head, err := br.Peek(512)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) && len(head) == 0 {
 		closeFn()
@@ -142,7 +165,7 @@ func openPayload(r io.Reader, kind int, opts Options) (*payload, error) {
 	return &payload{r: br, isTar: kind == fmtTar || isTarHeader(head), close: closeFn}, nil
 }
 
-// singleName is the name a bare compressed file extracts under: the name the
+// singleName is the name a bare compressed file lists under: the name the
 // caller supplied, without its stream suffix when it has one.
 func singleName(baseName string) string {
 	if _, original, ok := strings.Cut(baseName, "~~"); ok {
@@ -155,55 +178,6 @@ func singleName(baseName string) string {
 	return name
 }
 
-// tarEntry validates one tar header's kind and returns whether it is a directory; skip is true for the pax global
-// header, which names no file.
-func tarKind(h *tar.Header) (isDir, skip bool, err error) {
-	switch h.Typeflag {
-	case tar.TypeReg, tar.TypeCont:
-		return false, false, nil
-	case tar.TypeDir:
-		return true, false, nil
-	case tar.TypeXGlobalHeader:
-		return false, true, nil
-	case tar.TypeSymlink, tar.TypeLink:
-		return false, false, &Error{Entry: h.Name, Reason: ErrLink}
-	}
-	return false, false, &Error{Entry: h.Name, Reason: ErrSpecialFile}
-}
-
-func (x *extractor) stream(r io.Reader, kind int, baseName string) error {
-	p, err := openPayload(r, kind, x.opts)
-	if err != nil {
-		return err
-	}
-	defer p.close()
-	if !p.isTar {
-		open := func() (io.ReadCloser, error) { return io.NopCloser(p.r), nil }
-		return x.entry(singleName(baseName), false, open, nil)
-	}
-	tr := tar.NewReader(p.r)
-	for {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return wrap("", err)
-		}
-		isDir, skip, err := tarKind(h)
-		if err != nil {
-			return err
-		}
-		if skip {
-			continue
-		}
-		open := func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }
-		if err := x.entry(h.Name, isDir, open, nil); err != nil {
-			return err
-		}
-	}
-}
-
 // streamOptions are the caps for reading a stream of srcSize bytes without extracting it.
 func streamOptions(srcSize int64) Options {
 	o := Options{MaxEntries: DefaultMaxEntries}.withDefaults()
@@ -214,14 +188,15 @@ func streamOptions(srcSize int64) Options {
 // streamSize is the bytes a stream format unpacks to, counted by reading it within the caps; a stream over them
 // reports the cap.
 func streamSize(r io.Reader, kind int, srcSize int64) (int64, error) {
-	p, err := openPayload(r, kind, streamOptions(srcSize))
+	opts := streamOptions(srcSize)
+	p, err := openPayload(r, kind, streamBudget(opts.MaxTotalBytes, opts.MaxEntries))
 	if err != nil {
 		return 0, err
 	}
 	defer p.close()
 	n, err := io.Copy(io.Discard, p.r)
 	if _, typed := errors.AsType[*Error](err); typed {
-		return streamOptions(srcSize).MaxTotalBytes, nil
+		return opts.MaxTotalBytes, nil
 	}
 	return n, err
 }

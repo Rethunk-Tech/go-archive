@@ -379,14 +379,14 @@ func checkSevenZipCoder(method []byte, propsSize uint64, props []byte) error {
 			return errSevenZipHeader
 		}
 		dictCap := uint64(2|p&1) << (uint(p)/2 + 11)
-		if dictCap > uint64(MaxDecoderBytes) {
+		if dictCap > uint64(maxDecoderBytes) {
 			return errSevenZipDecoderMemory
 		}
 	case bytes.Equal(method, []byte{0x03, 0x01, 0x01}), bytes.Equal(method, []byte{0x03, 0x04, 0x01}):
 		if propsSize != 5 {
 			return errSevenZipHeader
 		}
-		if uint64(binary.LittleEndian.Uint32(props[1:])) > uint64(MaxDecoderBytes) {
+		if uint64(binary.LittleEndian.Uint32(props[1:])) > uint64(maxDecoderBytes) {
 			return errSevenZipDecoderMemory
 		}
 	}

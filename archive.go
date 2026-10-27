@@ -1,8 +1,7 @@
-// Package archive extracts zip, RAR, 7z, tar and gzip, xz, lzma, zstd or bzip2 files (alone or around a tar) from an
-// untrusted source into a directory.
 package archive
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"hash/crc32"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,9 +25,9 @@ const (
 	DefaultMaxTotalBytes int64 = 64 << 30
 	DefaultMaxEntries          = 20000
 
-	// MaxDecoderBytes caps the window or dictionary a decompressor may allocate. It is separate from the entry cap
+	// maxDecoderBytes caps the window or dictionary a decompressor may allocate. It is separate from the entry cap
 	// because a bigger file must not mean a bigger in-memory dictionary.
-	MaxDecoderBytes int64 = 256 << 20
+	maxDecoderBytes int64 = 256 << 20
 
 	// Below DefaultRatioFloor an archive may unpack to any size within the caps; above it, to at most
 	// DefaultMaxRatio times its own size. Deflate tops out near 1030:1, so real packages stay well inside.
@@ -63,6 +63,12 @@ func (o Options) ratioCap(srcSize int64) int64 {
 	return min(o.MaxTotalBytes, max(o.RatioFloor, srcSize*o.MaxRatio))
 }
 
+// payloadBudget is everything a stream may decompress: the total cap, the
+// headers the entry cap can put around it, and the peek's slack.
+func (o Options) payloadBudget() int64 {
+	return o.MaxTotalBytes + int64(o.MaxEntries)*tarOverhead + 1<<20
+}
+
 func (o Options) withDefaults() Options {
 	if o.MaxEntryBytes == 0 {
 		o.MaxEntryBytes = DefaultMaxEntryBytes
@@ -92,8 +98,14 @@ type Source interface {
 // untrusted download fails its item instead of ending the process.
 func RecoverMalformed(err *error) {
 	if r := recover(); r != nil {
-		*err = &Error{Reason: fmt.Errorf("%w: %v", ErrMalformed, r)}
+		*err = malformed(r)
 	}
+}
+
+// malformed is what a recovered panic becomes, so every path that catches one
+// reports it the same way.
+func malformed(r any) error {
+	return &Error{Reason: fmt.Errorf("%w: %v", ErrMalformed, r)}
 }
 
 // openSevenZip is sevenzip.NewReader with a panic from a crafted header returned as ErrMalformed. Reading a file from
@@ -117,32 +129,10 @@ func Extract(src Source, size int64, baseName string, dest *os.Root, opts Option
 func extract(src Source, size int64, baseName string, dest *os.Root, opts Options) (err error) {
 	defer RecoverMalformed(&err)
 
-	var magic [headLen]byte
-	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
-	head := magic[:n]
-
 	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
 	x.ratioMax = x.opts.ratioCap(size)
-
-	switch detect(head) {
-	case fmtZip:
-		return x.zip(src, size)
-	case fmtRAR:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		return x.rar(io.NewSectionReader(src, start, size-start))
-	case fmtSevenZip:
-		return x.sevenZip(src, size)
-	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		return x.stream(io.NewSectionReader(src, start, size-start), detect(head), baseName)
-	}
-	return &Error{Reason: ErrUnsupportedFormat}
+	budget := streamBudget(x.opts.MaxTotalBytes, x.opts.MaxEntries)
+	return walk(src, size, baseName, budget, x.admitEntry)
 }
 
 const (
@@ -170,70 +160,108 @@ func detect(head []byte) int {
 	return detectStream(head)
 }
 
-type extractor struct {
-	root    *os.Root
-	opts    Options
-	entries int
-	// ratioMax is the most the archive may unpack to for its size.
-	ratioMax int64
-	total    int64
-	seen     map[string]string // lower-cased path -> spelling first used
-	files    map[string]bool
+// detectSource is detect over the first headLen bytes, read through a section
+// reader so the caller's offset is untouched.
+func detectSource(src io.ReaderAt) int {
+	var magic [headLen]byte
+	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
+	return detect(magic[:n])
 }
 
-func (x *extractor) zip(r io.ReaderAt, size int64) error {
-	zr, err := zip.NewReader(r, size)
-	// The path check below is stricter than the reader's own.
+// item is one entry as a format reader sees it. Entry is what a caller is told;
+// the rest is what Extract's policy needs and a listing has no use for.
+type item struct {
+	Entry
+	mode      fs.FileMode
+	encrypted bool
+	linkType  int
+	crc       *uint32
+}
+
+// walkFunc receives one entry and a reader for its bytes. The reader is valid
+// until walkFunc returns, so a caller that leaves it unread lets the decoder
+// skip those bytes.
+type walkFunc func(it item, open func() (io.ReadCloser, error)) error
+
+// errWalkStop ends a walk with no error, for a caller that already has what it
+// asked for; walk itself never returns it.
+var errWalkStop = errors.New("walk stopped")
+
+// walk enumerates an archive's entries once, forward, handing each to fn.
+// Extract and Lister both enumerate through it and so cannot disagree about
+// what an archive holds; only their read budgets differ. budget is the payload
+// a stream may decompress, which has to be set where the decoder is built
+// rather than on what comes out of it.
+func walk(src Source, size int64, baseName string, budget int64, fn walkFunc) error {
+	kind := detectSource(src)
+	switch kind {
+	case fmtZip:
+		return walkZip(src, size, fn)
+	case fmtRAR:
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		return walkRAR(io.NewSectionReader(src, start, size-start), fn)
+	case fmtSevenZip:
+		return walkSevenZip(src, size, fn)
+	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
+		start, err := src.Seek(0, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		return walkStream(io.NewSectionReader(src, start, size-start), kind, baseName, budget, fn)
+	}
+	return &Error{Reason: ErrUnsupportedFormat}
+}
+
+func walkZip(src io.ReaderAt, size int64, fn walkFunc) error {
+	zr, err := zip.NewReader(src, size)
+	// The path check below is stricter than the reader's own, so a reader that
+	// came back anyway is still worth walking.
 	if err != nil && (zr == nil || !errors.Is(err, zip.ErrInsecurePath)) {
 		return wrap("", err)
 	}
-	if len(zr.File) > x.opts.MaxEntries {
-		return &Error{Reason: ErrTooManyEntries}
-	}
 	for _, f := range zr.File {
-		f.Name = zipName(f)
 		mode := f.Mode()
-		if f.Flags&1 != 0 {
-			return &Error{Entry: f.Name, Reason: ErrEncrypted}
+		it := item{
+			Entry:     Entry{Name: zipName(f), Size: declared(f.UncompressedSize64), IsDir: mode.IsDir()},
+			mode:      mode,
+			encrypted: f.Flags&1 != 0,
+			crc:       &f.CRC32,
 		}
-		if err := checkKind(f.Name, mode); err != nil {
-			return err
-		}
-		// A writer that separates with backslashes ends a folder's name with one too, which the reader does not see as a folder.
-		isDir := mode.IsDir() || strings.HasSuffix(f.Name, `\`)
-		if err := x.entry(f.Name, isDir, func() (io.ReadCloser, error) { return f.Open() }, &f.CRC32); err != nil {
+		if err := fn(it, f.Open); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (x *extractor) sevenZip(r io.ReaderAt, size int64) error {
-	if err := checkSevenZipLimits(r, size); err != nil {
+func walkSevenZip(src io.ReaderAt, size int64, fn walkFunc) error {
+	if err := checkSevenZipLimits(src, size); err != nil {
 		return wrap("", err)
 	}
-	zr, err := openSevenZip(r, size)
+	zr, err := openSevenZip(src, size)
 	if err != nil {
 		return wrap("", err)
 	}
-	if len(zr.File) > x.opts.MaxEntries {
-		return &Error{Reason: ErrTooManyEntries}
-	}
 	for _, f := range zr.File {
 		mode := f.Mode()
-		if err := checkKind(f.Name, mode); err != nil {
-			return err
+		it := item{
+			Entry: Entry{Name: f.Name, Size: declared(f.UncompressedSize), IsDir: mode.IsDir()},
+			mode:  mode,
+			crc:   &f.CRC32,
 		}
-		if err := x.entry(f.Name, mode.IsDir(), f.Open, &f.CRC32); err != nil {
+		if err := fn(it, f.Open); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (x *extractor) rar(r io.Reader) error {
+func walkRAR(src io.Reader, fn walkFunc) error {
 	// A larger RAR window cannot produce an entry larger than the extraction cap.
-	rr, err := rardecode.NewReader(r, rardecode.MaxDictionarySize(MaxDecoderBytes))
+	rr, err := rardecode.NewReader(src, rardecode.MaxDictionarySize(maxDecoderBytes))
 	if err != nil {
 		return wrap("", err)
 	}
@@ -245,32 +273,110 @@ func (x *extractor) rar(r io.Reader) error {
 		if err != nil {
 			return wrap("", err)
 		}
-		if h.Encrypted || h.HeaderEncrypted {
-			return &Error{Entry: h.Name, Reason: ErrEncrypted}
-		}
-		if h.LinkType != rardecode.LinkTypeNone {
-			return &Error{Entry: h.Name, Reason: ErrLink}
-		}
-		mode := h.Mode()
-		if h.HostOS == rardecode.HostOSUnix {
-			// Mode() reports only the symlink type bit; catch devices and pipes too.
-			switch h.Attributes & 0xF000 {
-			case 0, 0x4000, 0x8000:
-			case 0xA000:
-				return &Error{Entry: h.Name, Reason: ErrLink}
-			default:
-				return &Error{Entry: h.Name, Reason: ErrSpecialFile}
-			}
-		}
-		if err := checkKind(h.Name, mode); err != nil {
-			return err
+		it := item{
+			Entry:     Entry{Name: h.Name, Size: max(h.UnPackedSize, 0), IsDir: h.IsDir},
+			mode:      rarMode(h),
+			encrypted: h.Encrypted || h.HeaderEncrypted,
+			linkType:  int(h.LinkType),
 		}
 		// The reader verifies the RAR checksum itself when the entry ends.
-		open := func() (io.ReadCloser, error) { return io.NopCloser(rr), nil }
-		if err := x.entry(h.Name, h.IsDir, open, nil); err != nil {
+		if err := fn(it, func() (io.ReadCloser, error) { return io.NopCloser(rr), nil }); err != nil {
 			return err
 		}
 	}
+}
+
+func walkStream(src io.Reader, kind int, baseName string, budget int64, fn walkFunc) error {
+	p, err := openPayload(src, kind, budget)
+	if err != nil {
+		return err
+	}
+	defer p.close()
+	if !p.isTar {
+		// A bare stream's header declares no size, so -1 marks the one entry
+		// whose size only draining its bytes can give.
+		it := item{Entry: Entry{Name: singleName(baseName), Size: -1}}
+		return fn(it, func() (io.ReadCloser, error) { return io.NopCloser(p.r), nil })
+	}
+	tr := tar.NewReader(p.r)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return wrap("", err)
+		}
+		// A pax global header describes the entries after it and names no file.
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		it := item{
+			Entry: Entry{Name: h.Name, Size: max(h.Size, 0), IsDir: h.Typeflag == tar.TypeDir},
+			mode:  tarMode(h.Typeflag),
+		}
+		if err := fn(it, func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }); err != nil {
+			return err
+		}
+	}
+}
+
+// declared clamps a header's declared size, which a crafted archive can set to
+// anything, into a non-negative int64.
+func declared(n uint64) int64 {
+	return int64(min(n, math.MaxInt64))
+}
+
+// rarMode is the header's mode plus the Unix file kind its attributes name.
+// Mode() reports only the symlink, so a device, pipe or socket would otherwise
+// look like a regular file.
+func rarMode(h *rardecode.FileHeader) fs.FileMode {
+	mode := h.Mode()
+	if h.HostOS != rardecode.HostOSUnix {
+		return mode
+	}
+	switch h.Attributes & 0xF000 {
+	case 0, 0x4000, 0x8000, 0xA000:
+		return mode
+	case 0x1000:
+		return mode | fs.ModeNamedPipe
+	case 0x2000:
+		return mode | fs.ModeDevice | fs.ModeCharDevice
+	case 0xC000:
+		return mode | fs.ModeSocket
+	}
+	return mode | fs.ModeIrregular
+}
+
+// tarMode is a tar header's kind as a file mode, so one kind check serves every
+// format.
+func tarMode(typeflag byte) fs.FileMode {
+	switch typeflag {
+	case tar.TypeReg, tar.TypeCont:
+		return 0
+	case tar.TypeDir:
+		return fs.ModeDir
+	case tar.TypeSymlink, tar.TypeLink:
+		return fs.ModeSymlink
+	case tar.TypeChar:
+		return fs.ModeDevice | fs.ModeCharDevice
+	case tar.TypeBlock:
+		return fs.ModeDevice
+	case tar.TypeFifo:
+		return fs.ModeNamedPipe
+	}
+	return fs.ModeIrregular
+}
+
+type extractor struct {
+	root    *os.Root
+	opts    Options
+	entries int
+	// ratioMax is the most the archive may unpack to for its size.
+	ratioMax int64
+	total    int64
+	seen     map[string]string // lower-cased path -> spelling first used
+	files    map[string]bool
 }
 
 func checkKind(name string, mode fs.FileMode) error {
@@ -283,34 +389,51 @@ func checkKind(name string, mode fs.FileMode) error {
 	return nil
 }
 
-// entry validates one entry's name and caps, then creates the directory or
-// writes the file. wantCRC is the CRC32 the archive declares, when it has one.
-func (x *extractor) entry(name string, isDir bool, open func() (io.ReadCloser, error), wantCRC *uint32) error {
-	rel, err := x.admit(name, isDir)
+// admitEntry is extraction's policy for one walked entry: refuse encryption,
+// links and special files, then admit the name before anything reaches the
+// destination.
+func (x *extractor) admitEntry(it item, open func() (io.ReadCloser, error)) error {
+	if it.encrypted {
+		return &Error{Entry: it.Name, Reason: ErrEncrypted}
+	}
+	if it.linkType != int(rardecode.LinkTypeNone) {
+		return &Error{Entry: it.Name, Reason: ErrLink}
+	}
+	if err := checkKind(it.Name, it.mode); err != nil {
+		return err
+	}
+	// A writer that separates with backslashes ends a folder's name with one too, which the reader does not see as a folder.
+	isDir := it.IsDir || strings.HasSuffix(it.Name, `\`)
+	rel, err := x.admit(it.Name, isDir)
 	if err != nil {
 		return err
 	}
 	if rel == "" {
 		return nil
 	}
+	return x.entry(it, rel, isDir, open)
+}
+
+// entry creates the directory or writes the file, at the path admit returned.
+func (x *extractor) entry(it item, rel string, isDir bool, open func() (io.ReadCloser, error)) error {
 	target := filepath.FromSlash(rel)
 	if isDir {
 		if err := x.root.MkdirAll(target, 0o750); err != nil {
-			return wrap(name, err)
+			return wrap(it.Name, err)
 		}
 		return nil
 	}
 	if dir := filepath.Dir(target); dir != "." {
 		if err := x.root.MkdirAll(dir, 0o750); err != nil {
-			return wrap(name, err)
+			return wrap(it.Name, err)
 		}
 	}
 	src, err := open()
 	if err != nil {
-		return wrap(name, err)
+		return wrap(it.Name, err)
 	}
 	defer func() { _ = src.Close() }()
-	return x.write(name, target, src, wantCRC)
+	return x.write(it.Name, target, src, it.crc)
 }
 
 func (x *extractor) write(name, target string, src io.Reader, wantCRC *uint32) error {
