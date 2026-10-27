@@ -23,10 +23,9 @@ type ListerOptions struct {
 
 // budget is what the decoder may produce for the whole listing. A stream cannot
 // be enumerated without decompressing it, so the aggregate needs a ceiling even
-// though the per-entry bound is what a caller sets; it is Extract's total cap,
-// which keeps one rule for both entry points. Each entry read through Open is
-// capped at MaxEntryBytes, so a single bomb fails there and an archive of many
-// legitimate entries is not refused for being large.
+// though the per-entry bound is what a caller sets. It is Extract's total cap, so
+// one rule serves both entry points: a single bomb fails on the per-entry bound
+// in Open, and an archive of many legitimate entries is not refused for size.
 func (o ListerOptions) budget() int64 {
 	return streamBudget(DefaultMaxTotalBytes, DefaultMaxEntries)
 }

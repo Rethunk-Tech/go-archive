@@ -42,9 +42,10 @@ func isDeviceName(stem string) bool {
 		(strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT"))
 }
 
-// zipName is an entry's name as UTF-8. Zips written without the UTF-8 flag carry names in the writer's locale;
-// for Stardew mods that is most often GBK from Chinese-locale tools, and GB18030 decodes it. A name left as raw
-// bytes extracts to a folder the game's .NET runtime cannot open.
+// zipName is an entry's name as UTF-8. Zips written without the UTF-8 flag carry
+// names in the writer's locale, most often GBK from Chinese-locale tools, which
+// GB18030 decodes. Left as raw bytes the name extracts to a directory the
+// caller's own runtime cannot open.
 func zipName(f *zip.File) string { return utf8Name(f.Name) }
 
 func utf8Name(name string) string {

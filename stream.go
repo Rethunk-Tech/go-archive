@@ -16,25 +16,30 @@ import (
 	"github.com/ulikunitz/xz/lzma"
 )
 
-// headLen is how much of a file's start detect reads: enough for the "ustar" marker at offset 257 of a tar header.
+// headLen is how much of a file's start detect reads: enough for the "ustar"
+// marker at offset 257 of a tar header.
 const headLen = 262
 
-// dictLimit caps a decompressor's window, so a header cannot make it allocate more than maxDecoderBytes.
+// dictLimit caps a decompressor's window, so a header cannot make it allocate
+// more than maxDecoderBytes.
 const dictLimit = maxDecoderBytes
 
-// tarOverhead is what a tar adds around each entry's bytes (header, padding), counted into the stream's budget so
-// skipped or unread data cannot decompress without bound.
+// tarOverhead is what a tar adds around each entry's bytes (header, padding),
+// counted into the stream's budget so skipped or unread data cannot decompress
+// without bound.
 const tarOverhead = 1536
 
-// streamBudget is the most a stream may decompress for a payload allowance: the allowance itself, the tar headers
-// that can sit around it, and a megabyte for the peek. A tar's headers are not payload, so counting them against the
-// allowance would stop a legitimate archive short of it.
+// streamBudget is the most a stream may decompress for a payload allowance: the
+// allowance, the tar headers around it, and a megabyte for the peek. A tar's
+// headers are not payload, so charging them to the allowance would stop a
+// legitimate archive short of it.
 func streamBudget(payload int64, entries int) int64 {
 	return payload + int64(entries)*tarOverhead + 1<<20
 }
 
-// looksLikeLZMA recognises the classic .lzma header, which has no magic: valid properties, a dictionary size an
-// encoder would write (a power of two, or one and a half of one) and an unknown or sane uncompressed size.
+// looksLikeLZMA recognises the classic .lzma header, which has no magic: valid
+// properties, a dictionary size an encoder would write (a power of two, or one
+// and a half of one) and an unknown or sane uncompressed size.
 func looksLikeLZMA(head []byte) bool {
 	if len(head) < lzma.HeaderLen || head[0] >= 225 {
 		return false
@@ -109,7 +114,8 @@ func capReader(r io.Reader, budget int64) *limitReader {
 	return &limitReader{r: r, left: budget, reason: ErrArchiveTooLarge}
 }
 
-// payload is the decompressed bytes of a stream format, positioned at the start, and whether they are a tar.
+// payload is the decompressed bytes of a stream format, positioned at the start,
+// and whether they are a tar.
 type payload struct {
 	r     *bufio.Reader
 	isTar bool
@@ -185,8 +191,8 @@ func streamOptions(srcSize int64) Options {
 	return o
 }
 
-// streamSize is the bytes a stream format unpacks to, counted by reading it within the caps; a stream over them
-// reports the cap.
+// streamSize is the bytes a stream format unpacks to, counted by reading it
+// within the caps; a stream over them reports the cap.
 func streamSize(r io.Reader, kind int, srcSize int64) (int64, error) {
 	opts := streamOptions(srcSize)
 	p, err := openPayload(r, kind, streamBudget(opts.MaxTotalBytes, opts.MaxEntries))
