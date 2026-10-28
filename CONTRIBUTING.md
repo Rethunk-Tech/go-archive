@@ -13,9 +13,8 @@ trailers.
 gate
 ```
 
-Everything CI runs has a local counterpart, so a green `gate` and a green run mean the same thing.
-The one exception is the `windows-latest` job: its behaviour cannot run on Linux, so it is only ever
-green in CI.
+`gate` is what the CI gate job runs. The `windows-latest` job runs the tests where
+`os.Root` enforces reserved Windows names, which has no local counterpart.
 
 ## Exports
 

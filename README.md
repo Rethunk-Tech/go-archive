@@ -27,7 +27,6 @@ Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.m
 
 ## Features
 
-- Ten formats behind one detector that reads magic bytes, so a renamed file still opens correctly.
 - `Extract` enforces policy: path traversal, unsafe names, case collisions, symlinks and hardlinks,
   device and pipe entries, encryption, and the entry, entry-size, total-size and ratio caps.
 - `Lister` walks entries forward-only and applies no extraction policy. Decompression is its only

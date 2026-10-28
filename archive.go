@@ -3,11 +3,10 @@
 //
 // Format comes from the magic bytes, never the extension: zip, RAR 4 and 5, 7z,
 // tar, and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar.
-// Every reader is bounded in memory and in bytes before it produces output,
-// because the input is a download from the internet.
+// Every reader is bounded in memory and in bytes before it produces output.
 //
 // Extract enforces the name, kind and size policy. Lister walks the same entries
-// with no policy, for a caller that only needs names and sizes.
+// and only bounds decompression.
 package archive
 
 import (

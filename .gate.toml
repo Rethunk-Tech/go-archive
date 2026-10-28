@@ -20,10 +20,8 @@ run = "./scripts/actionlint"
 [gates.fmt]
 run = "go tool golangci-lint fmt --diff ./..."
 
-# The Windows-only behaviour (WindowsSegment, the mode assertions, case folding,
-# os.Root's reserved names) is a runtime value, so no Linux gate can reach it.
-# This compiles the test files for Windows as the strongest local stand-in; the
-# verdict itself comes from the windows-latest job in ci.yml.
+# Compiles the tests for Windows. The reserved-name refusal is what the
+# windows-latest job runs; vet cannot.
 [gates.crosscompile]
 run = "GOOS=windows GOARCH=amd64 go vet ./..."
 

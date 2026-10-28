@@ -14,8 +14,7 @@ Please do not open a public issue for a suspected vulnerability first.
 
 ## What is in scope
 
-This package reads untrusted archives. The interesting failures are ones where crafted input escapes
-the guarantees above it:
+This package reads untrusted archives. A report is a crafted input that escapes one of these:
 
 - An entry that writes outside the `*os.Root` passed to `Extract`, whether through a traversal name,
   a symlink, a hardlink, or a case collision on a case-insensitive filesystem.

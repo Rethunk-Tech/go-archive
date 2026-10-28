@@ -34,9 +34,7 @@ err = archive.Extract(f, info.Size(), filepath.Base(path), root, archive.Options
 `Lister` enumerates without writing anything:
 
 ```go
-l, err := archive.NewLister(f, info.Size(), filepath.Base(path), archive.ListerOptions{
- MaxEntryBytes: 8 << 30,
-})
+l, err := archive.NewLister(f, info.Size(), filepath.Base(path), archive.ListerOptions{})
 if err != nil {
  return err
 }
@@ -97,5 +95,3 @@ pre-push runs `gate`.
 ```bash
 gate
 ```
-
-Licensed under MIT; see [LICENSE](LICENSE).

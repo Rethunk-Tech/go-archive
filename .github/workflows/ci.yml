@@ -17,9 +17,7 @@ concurrency:
 
 jobs:
   gate:
-    # The whole gate as a contributor runs it, not a restatement of its steps: a check that exists
-    # only in this file is a red main waiting to happen. `.gate.toml` carries the three gates `gate`
-    # cannot infer, and go.mod's tool directive supplies the binaries.
+    # The same `gate` a contributor runs. A check that exists only in this file does not run locally.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -51,9 +49,7 @@ jobs:
         run: gate --timeout 15m
 
   test:
-    # Windows runs the tests, not a build. The 0o600/0o750 mode assertions, case-collision
-    # detection, WindowsSegment and os.Root's reserved-name handling are runtime values there, so a
-    # compile would prove nothing about any of them.
+    # Runs the tests. os.Root's reserved-name refusal is enforced on this platform.
     strategy:
       # Both legs report, so one platform's failure never hides the other's.
       fail-fast: false

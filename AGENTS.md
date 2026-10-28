@@ -6,42 +6,25 @@ user-facing message quotes. The module imports no consumer package.
 
 ## Gate
 
-```sh
-gate
-```
+`gate` is the command. Each override in `.gate.toml` is there because a runner
+cannot resolve that check from PATH.
 
-`.gate.toml` names the gates a runner cannot resolve from PATH. Lint, vuln and
-format run through `go tool`, so their versions are the `tool` directive in
-`go.mod`. Workflow lint is `scripts/actionlint`: actionlint 1.7.12 does not
-compile against the `yaml.v3` this module resolves, so the script pins a
-release and checksum. CI fetches its own copies of the same pins.
-
-`WindowsSegment` and case-collision bookkeeping run on Linux. `os.Root`'s
-reserved-name refusal is the platform's, so only the `windows-latest` job
-reaches it. Windows synthesises mode `0666` for a writable file, so mode
-assertions run off Windows.
+`WindowsSegment` and case-collision comparisons run on Linux. Two things do
+not. `os.Root` refusing a reserved Windows name is the platform's, so only
+the `windows-latest` job reaches it. Windows reports mode `0666` for a
+writable file, so the `0o600` and `0o750` assertions run off Windows.
 
 ## Shape
 
-One package. An unexported `walk` is the only enumerator; `Extract` and
-`Lister` both use it. `item`, `walkFunc` and `walkLimits` stay unexported.
-A second package would have to export them to keep one enumerator, which is
-a larger surface. Tests are in-package for the same reason.
+One package. `walk` is the only enumerator, and it is unexported. `Extract`
+and `Lister` both use it. How their bounds differ is the contract in
+[HUMANS.md](HUMANS.md). `item`, `walkFunc` and `walkLimits` stay unexported;
+exporting them is what a second package would cost.
 
-| | `Extract` | `Lister` |
-| --- | --- | --- |
-| Entry cap | enforces `MaxEntries` | none; counting is the caller's policy |
-| Names and kinds | refuses traversal, unsafe names, links, special files, encryption | reports what the archive holds |
-| Bytes | caps every read against the extraction caps | caps each entry at `ListerOptions.MaxEntryBytes` |
-| Destination | writes through the caller's `*os.Root` | writes nothing |
-
-A listing that caps entries breaks that split. `Extract` refuses an
-over-declared zip or 7z entry count before writing, so the refusal leaves no
-partial tree.
-
+`Extract` refuses an over-declared zip or 7z entry count before writing.
 `maxDecoderBytes` is set where the decoder is built. A stream's aggregate
-budget stops a bomb the per-entry bound would allow spread thin. Neither is
-policy, and neither can be lowered away.
+budget stops a bomb the per-entry bound would allow spread thin. Neither
+bound is policy.
 
 ## Files
 
@@ -53,8 +36,7 @@ policy, and neither can be lowered away.
 | `stream.go` | streaming-format detection, decoder window, stream budget |
 | `detect.go` | format identifiers and magic-byte detection |
 | `sevenzip_limits.go` | 7z header walk, before the reader sees the archive |
-| `lister.go`, `names.go`, `size.go`, `recover.go` | one export each |
-
-## Comments
-
-Say why. Git holds the history.
+| `lister.go` | `Lister` |
+| `names.go` | `WindowsSegment` |
+| `size.go` | `DeclaredSize` |
+| `recover.go` | `RecoverMalformed` |
