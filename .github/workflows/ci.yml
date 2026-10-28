@@ -78,5 +78,5 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           for target in FuzzCleanName FuzzExtract FuzzExtractZipEntries FuzzExtractStreams; do
-            go test -run=^$ -fuzz="$target" -fuzztime=20s .
+            go test -run=^$ -fuzz="^${target}\$" -fuzztime=20s .
           done
