@@ -10,7 +10,7 @@
 ---
 
 One reader for untrusted archives, as a single Go package: `archive`, module
-`github.com/Rethunk-Tech/go-archive`.
+`github.com/Rethunk-Tech/go-archive`. Mortar is its one consumer.
 
 Magic bytes pick the format, never the file extension. Ten are read: zip, RAR 4, RAR 5, 7z, tar,
 and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar. Archives arrive from the
@@ -30,9 +30,10 @@ Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.m
 - Ten formats behind one detector that reads magic bytes, so a renamed file still opens correctly.
 - `Extract` enforces policy: path traversal, unsafe names, case collisions, symlinks and hardlinks,
   device and pipe entries, encryption, and the entry, entry-size, total-size and ratio caps.
-- `Lister` walks entries forward-only and applies no extraction policy, for callers that want names
-  and sizes only.
-- Writes travel through a caller-supplied `*os.Root`, so no entry resolves outside the destination.
+- `Lister` walks entries forward-only and applies no extraction policy. Decompression is its only
+  bound (`ListerOptions.MaxEntryBytes`).
+- The destination must already exist. Writes travel through the caller's `*os.Root`, so no entry
+  resolves outside it.
 - Decoder windows are capped independently of entry sizes, so a crafted header cannot force a
   multi-gigabyte allocation.
 - Fuzzed against every format, with the crash corpus committed.

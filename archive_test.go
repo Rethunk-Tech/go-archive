@@ -216,10 +216,8 @@ func TestNothingWrittenOutsideDest(t *testing.T) {
 	}
 }
 
-// The root is the last line of defence, so the test asserts Extract's own write
-// path refuses to escape: the name check runs first, and the root would refuse the
-// path independently. A zip whose entries cannot pass the cleaner still must not
-// produce a file beside the destination.
+// cleanName rejects a traversal before Extract opens a file. The root is the write
+// path underneath that check, so the same names are also refused by OpenFile.
 func TestNothingWrittenOutsideTheRoot(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
@@ -230,10 +228,25 @@ func TestNothingWrittenOutsideTheRoot(t *testing.T) {
 	// A permissive segment policy still cannot admit these, because traversal is
 	// checked outside the hook.
 	permissive := Options{Segment: func(string) bool { return true }}
-	for _, name := range []string{"../escape.txt", "/escape.txt", "a/../../escape.txt", `..\escape.txt`} {
+	for _, name := range []string{"../x", "/x", "a/../../x", `..\x`} {
 		err := extractWith(t, buildZip(t, zentry{name: name, body: "x"}), dest, permissive)
 		if !errors.Is(err, ErrTraversal) {
 			t.Fatalf("%q: got %v, want ErrTraversal", name, err)
+		}
+	}
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	for _, name := range []string{"../x", "/x"} {
+		f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_ = f.Close()
+			t.Fatalf("%q: root created the file", name)
+		}
+		if !strings.Contains(err.Error(), "path escapes from parent") {
+			t.Fatalf("%q: %v", name, err)
 		}
 	}
 	entries, err := os.ReadDir(parent)

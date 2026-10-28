@@ -76,10 +76,11 @@ jobs:
           go-version-file: go.mod
           run-test-race: "true"
 
-      # Linux only: fuzzing one target on two runners buys the same search twice, and the Windows
-      # leg already replays every seed corpus. The other targets are FuzzExtract,
-      # FuzzExtractZipEntries, FuzzExtractStreams and FuzzList; this step names the cheapest of them
-      # so it stays well inside two minutes.
+      # Linux only. Each target reaches a reader the others do not, and the Windows job
+      # already replays every seed.
       - name: Fuzz smoke
         if: runner.os == 'Linux'
-        run: go test -run=^$ -fuzz=FuzzCleanName -fuzztime=20s .
+        run: |
+          for target in FuzzCleanName FuzzExtract FuzzExtractZipEntries FuzzExtractStreams; do
+            go test -run=^$ -fuzz="$target" -fuzztime=20s .
+          done
