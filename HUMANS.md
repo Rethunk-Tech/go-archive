@@ -60,6 +60,9 @@ for {
 | | Contract |
 | --- | --- |
 | `Extract` refuses | path traversal, disallowed names, case collisions, symlinks and hardlinks, device/pipe/socket entries, encrypted archives, and archives over the entry, entry-size, total-size or ratio caps |
+| `ExtractFunc` | admits as `Extract` does and passes the cleaned slash path to `fn`; counts the bytes `fn` reads against the caps, checks a file's checksum only when `fn` reads it to the end, and returns `fn`'s own error unwrapped. Nothing judges the tree, so a file `a` beside `a/b` passes |
+| `ExtractReader` | RAR and the stream formats only; zip and 7z are `ErrUnsupportedFormat`. The size is unknown, so `MaxTotalBytes` is the bound with no ratio. A read error is returned in the chain, and a body that ends before its format shows is `io.ErrUnexpectedEOF` |
+| `Options.CaseSensitive` | off by default; on, names differing only by case are both admitted, for an `ExtractFunc` sink that keeps them apart. An exact duplicate file is still refused |
 | `Extract` on failure | stops at the first error and leaves the partial tree, so pass a throwaway directory and discard it |
 | `baseName` | names the file a bare stream yields: the whole name less one trailing stream suffix (`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`, `.lz4`), matched case-insensitively; formats carrying their own names ignore it |
 | An empty tar | 1,024 zero bytes read as a tar with no entries only when `baseName` has a tar ending (`.tar`, `.tar.*`, `.tgz`, `.txz`, `.tzst`, `.tbz2`, `.tbz`); under any other name they are refused, since zeros are otherwise a valid stream payload |

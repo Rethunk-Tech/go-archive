@@ -16,8 +16,10 @@ writable file, so the `0o600` and `0o750` assertions run off Windows.
 
 ## Shape
 
-One package. `walk` is the only enumerator, and it is unexported. `Extract`
-and `Lister` both use it. How their bounds differ is the contract in
+One package. `walk` is the only enumerator, and it is unexported. `Extract`,
+`ExtractFunc`, `ExtractReader` and `Lister` all use it, and the three extractors
+share one admission path (`extractor.admitEntry`) with only the sink differing,
+so they cannot disagree about what an archive may hold. How their bounds differ is the contract in
 [HUMANS.md](HUMANS.md). `item`, `walkFunc` and `walkLimits` stay unexported;
 exporting them is what a second package would cost.
 
@@ -36,14 +38,15 @@ bound is policy.
 
 | File | Holds |
 | --- | --- |
-| `archive.go` | package doc, cap constants, `Options`, `Source`, `Extract` |
+| `archive.go` | package doc, cap constants, `Options`, `Source`, `Extract`, `ExtractFunc`, `ExtractReader` |
 | `errors.go` | the `Err*` sentinels, `Error` (an entry name with its reason) and `wrap` |
 | `walk.go` | `walk`, per-format enumerators, entry-mode mapping |
-| `extract.go` | name admission, case collisions, writing, byte caps |
+| `extract.go` | name admission, case collisions, byte caps, the root writer |
 | `stream.go` | streaming-format detection, decoder window, stream budget |
 | `detect.go` | format identifiers and magic-byte detection |
 | `sevenzip_limits.go` | 7z header walk, before the reader sees the archive |
 | `lister.go` | `Lister` |
-| `names.go` | `WindowsSegment` |
+| `names.go` | `WindowsSegment`, name cleaning, the extension table |
+| `mediatype.go` | `IsMediaType` |
 | `size.go` | `DeclaredSize` |
 | `recover.go` | `RecoverMalformed` |

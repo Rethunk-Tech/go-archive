@@ -30,6 +30,10 @@ Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.m
 
 - `Extract` enforces policy: path traversal, unsafe names, case collisions, symlinks and hardlinks,
   device and pipe entries, encryption, and the entry, entry-size, total-size and ratio caps.
+- `ExtractFunc` applies the same policy and hands each entry to a callback, for in-memory or
+  non-filesystem sinks. `ExtractReader` extracts RAR and the streams from a plain `io.Reader`.
+- `Extensions`, `HasExtension`, `StripExtension`, `IsStream` and `IsMediaType` name the formats
+  by file ending and by `Content-Type`.
 - `Lister` walks entries forward-only and applies no extraction policy. Decompression is its only
   bound (`ListerOptions.MaxEntryBytes`).
 - The destination must already exist. Writes travel through the caller's `*os.Root`, so no entry
