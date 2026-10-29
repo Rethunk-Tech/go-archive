@@ -10,7 +10,7 @@
 ---
 
 One reader for untrusted archives, as a single Go package: `archive`, module
-`github.com/Rethunk-Tech/go-archive`. Mortar is its one consumer.
+`github.com/Rethunk-Tech/go-archive`.
 
 Magic bytes pick the format, never the file extension. Eleven are read: zip, RAR 4, RAR 5, 7z,
 tar, and gzip, xz, lzma, zstd, bzip2 or lz4, each alone or wrapped around a tar. A zip entry may
