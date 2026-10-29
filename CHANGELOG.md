@@ -6,6 +6,10 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `NOTICE` carries the BSD 2-Clause licence of the vendored rardecode, which binaries built with this module must reproduce.
+
 ## [0.1.0] - 2026-10-28
 
 ### Added
