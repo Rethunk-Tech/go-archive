@@ -849,3 +849,24 @@ func openSized(t *testing.T, path string) (*os.File, int64) {
 	}
 	return f, info.Size()
 }
+
+// Real solid RAR4 and RAR5 archives from rarlab's rar: every entry extracts, and
+// a listing that skips each one decodes it only to its declared size, which an
+// honest solid file never passes.
+func TestSolidRARExtractsAndSkips(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"solid-rar4.rar", "solid-rar5.rar"} {
+		src := filepath.Join("testdata", name)
+		dest, err := extractDir(t, src, Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := readFile(t, filepath.Join(dest, "mod", "part12.txt")); len(got) != 16893 || !strings.HasSuffix(got, "3600\n") {
+			t.Fatalf("%s: part12.txt is %d bytes", name, len(got))
+		}
+		listed, err := listNames(t, src)
+		if err != nil || len(listed) != 14 {
+			t.Fatalf("%s: listed %d entries, %v", name, len(listed), err)
+		}
+	}
+}

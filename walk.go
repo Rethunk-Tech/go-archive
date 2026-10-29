@@ -11,8 +11,8 @@ import (
 	"math"
 	"strings"
 
+	"github.com/Rethunk-Tech/go-archive/internal/rardecode"
 	"github.com/bodgit/sevenzip"
-	"github.com/nwaples/rardecode/v2"
 	"github.com/ulikunitz/xz/lzma"
 )
 

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Rethunk-Tech/go-archive/internal/rardecode"
 	"github.com/bodgit/sevenzip"
 	"github.com/klauspost/compress/zstd"
-	"github.com/nwaples/rardecode/v2"
 )
 
 // Reasons carried by Error. A disk-full write is reported as the underlying
@@ -59,6 +59,8 @@ func wrap(entry string, err error) error {
 		err = ErrChecksum
 	case isReadError && re.Encrypted:
 		err = ErrEncrypted
+	case errors.Is(err, rardecode.ErrSolidOverrun):
+		err = fmt.Errorf("%w: %w", ErrMalformed, err)
 	case errors.Is(err, rardecode.ErrDictionaryTooLarge), errors.Is(err, zstd.ErrWindowSizeExceeded):
 		err = fmt.Errorf("%w: %w", ErrDecoderMemory, err)
 	}

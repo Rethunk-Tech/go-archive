@@ -30,11 +30,3 @@ declares that many entries. When a caller raises the cap and needs
 
 It checks that the error chain keeps `ENOSPC`. Forcing a real full filesystem
 is more fixture than that fact.
-
-## A solid RAR decodes a skipped entry past its declared size
-
-To reach the next entry, `rardecode` (`decode_reader.go` `nextFile`) drains
-the current one under its `limitedReader`, so it decodes all of that entry's
-packed data whatever `UnPackedSize` says. `solidCharge` counts the declared
-size only. Bounding the real output needs a hook or a patch in rardecode; a
-`replace` here would not reach consumers.

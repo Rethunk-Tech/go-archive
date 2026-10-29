@@ -58,6 +58,9 @@ linters:
   # canon go-golangci-lint-00014; the deviation is declared in canon.toml
   exclusions:
     generated: lax
+    # nwaples/rardecode, vendored to carry one patch; it keeps its own style.
+    paths:
+      - internal/rardecode
     rules:
       # G304 and G703 name a path an attacker controls. Every finding here is a
       # fixture this package's own test opened under t.TempDir() or testdata/,
@@ -121,6 +124,9 @@ formatters:
   enable:
     - gofumpt
     - goimports
+  exclusions:
+    paths:
+      - internal/rardecode
   settings:
     # canon go-golangci-lint-00012
     gofumpt:

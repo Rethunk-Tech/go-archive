@@ -17,6 +17,8 @@ Notable changes to `go-archive`. The format follows
   force the allocation its header names.
 - `ErrDecoderMemory` reports an archive whose decoder would need more than 256 MiB: a 7z or RAR
   dictionary, or a zstd window. It is not `ErrMalformed`, because such an archive is valid.
+- RAR is read through a vendored rardecode that decodes a skipped solid file only to its declared
+  size, refusing one that runs past it as `ErrMalformed`.
 - `RecoverMalformed` turns a panic in a format reader into `ErrMalformed`, so a crafted download
   fails its item instead of ending the process.
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and

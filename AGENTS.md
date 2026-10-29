@@ -21,6 +21,11 @@ and `Lister` both use it. How their bounds differ is the contract in
 [HUMANS.md](HUMANS.md). `item`, `walkFunc` and `walkLimits` stay unexported;
 exporting them is what a second package would cost.
 
+`internal/rardecode` is nwaples/rardecode v2.4.5 with one patch, marked
+`go-archive:` in `decode_reader.go` and `reader.go`: a skipped file in a solid
+archive decodes only to its declared size. Upstream changes are merged by hand;
+it is excluded from lint and format (`canon.toml`).
+
 `Extract` refuses an over-declared zip or 7z entry count before writing.
 `maxDecoderBytes` is set where the decoder is built. A stream's aggregate
 budget, capped by the ratio, stops a bomb the per-entry bound would allow

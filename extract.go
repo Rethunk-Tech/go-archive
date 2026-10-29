@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nwaples/rardecode/v2"
+	"github.com/Rethunk-Tech/go-archive/internal/rardecode"
 )
 
 type extractor struct {
