@@ -6,6 +6,8 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-28
+
 ### Added
 
 - `Extract` reads zip, RAR 4, RAR 5, 7z, tar, and gzip, xz, lzma, zstd, bzip2 or lz4 alone or
@@ -23,3 +25,6 @@ Notable changes to `go-archive`. The format follows
   fails its item instead of ending the process.
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
+
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Rethunk-Tech/go-archive/releases/tag/v0.1.0
