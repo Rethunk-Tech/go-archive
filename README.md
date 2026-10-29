@@ -50,4 +50,4 @@ Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.m
 
 ## License
 
-MIT — see [LICENSE](LICENSE). © 2026 Rethunk Technologies. The vendored `internal/rardecode` keeps its BSD 2-Clause licence; see [NOTICE](NOTICE).
+MIT — see [LICENSE](LICENSE). © 2026 Rethunk.Tech, LLC. The vendored `internal/rardecode` keeps its BSD 2-Clause licence; see [NOTICE](NOTICE).
