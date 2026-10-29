@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -111,7 +112,7 @@ func TestSevenZipFilesInfoAfterSubStreamsIsChecked(t *testing.T) {
 	hdr = append(hdr, 0x08, 0x00, 0x00)
 	hdr = append(hdr, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00)
 	b := sevenZipWith(hdr, []byte("x"))
-	if err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b))); !errors.Is(err, ErrMalformed) {
+	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b))); !errors.Is(err, ErrMalformed) {
 		t.Fatalf("got %v, want ErrMalformed for 2^64-1 files", err)
 	}
 }
@@ -193,5 +194,65 @@ func TestSevenZipOverTheEntryCapWritesNothing(t *testing.T) {
 	wantReason(t, err, ErrTooManyEntries, "")
 	if ents, _ := os.ReadDir(dest); len(ents) != 0 {
 		t.Fatalf("wrote %d entries", len(ents))
+	}
+}
+
+// A folder's coders are alive together, so their dictionaries add up, and 7-Zip
+// never chains two compressors outside BCJ2.
+func TestSevenZipFolderRules(t *testing.T) {
+	t.Parallel()
+	lzma := func(dict uint32) []byte {
+		props := binary.LittleEndian.AppendUint32([]byte{0x5D}, dict)
+		return append([]byte{0x23, 0x03, 0x01, 0x01, 0x05}, props...)
+	}
+	folder := func(coders ...[]byte) error {
+		b := []byte{byte(len(coders) & 0x7F)}
+		for _, c := range coders {
+			b = append(b, c...)
+		}
+		for range len(coders) - 1 {
+			b = append(b, 0x00, 0x00) // bind pairs
+		}
+		_, err := parseSevenZipFolder(&sevenZipCursor{r: bytes.NewReader(b)})
+		return err
+	}
+	if err := folder(lzma(1 << 20)); err != nil {
+		t.Fatalf("one LZMA coder: %v", err)
+	}
+	if err := folder(lzma(1<<20), lzma(1<<20)); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("two chained compressors: %v, want ErrMalformed", err)
+	}
+	if mem, err := checkSevenZipCoder([]byte{0x03, 0x01, 0x01}, 5, []byte{0x5D, 0, 0, 0, 0x10}); err != nil || mem != 256<<20 {
+		t.Fatalf("a 256 MiB dictionary reports %d, %v", mem, err)
+	}
+	if _, err := checkSevenZipCoder([]byte{0x21}, 1, []byte{40}); !errors.Is(err, ErrDecoderMemory) {
+		t.Fatalf("a 4 GiB LZMA2 dictionary: %v, want ErrDecoderMemory", err)
+	}
+}
+
+// Without a password an encrypted entry cannot be read, and trying costs a key
+// derivation, so the Lister lists it and refuses its bytes.
+func TestListerRefusesToOpenAnEncryptedSevenZipEntry(t *testing.T) {
+	t.Parallel()
+	l := openListerPath(t, filepath.Join("testdata", "encrypted.7z"), ListerOptions{})
+	for {
+		e, err := l.Next()
+		if err != nil {
+			t.Fatalf("no file entry: %v", err)
+		}
+		if e.IsDir {
+			continue
+		}
+		if _, err := l.Open(); !errors.Is(err, ErrEncrypted) {
+			t.Fatalf("Open = %v, want ErrEncrypted", err)
+		}
+		return
+	}
+}
+
+func TestGNUSparseTarEntryIsARegularFile(t *testing.T) {
+	t.Parallel()
+	if m := tarMode(tar.TypeGNUSparse); m != 0 {
+		t.Fatalf("tarMode(GNU sparse) = %v, want a regular file", m)
 	}
 }

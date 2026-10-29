@@ -3,17 +3,13 @@ package archive
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 
 	"github.com/ulikunitz/xz/lzma"
 )
 
-var (
-	errSevenZipHeader        = fmt.Errorf("%w: invalid 7z header", ErrMalformed)
-	errSevenZipDecoderMemory = errors.New("7z decoder memory exceeds the extraction cap")
-)
+var errSevenZipHeader = fmt.Errorf("%w: invalid 7z header", ErrMalformed)
 
 const (
 	sevenZipMaxFolders  = uint64(DefaultMaxEntries)
@@ -25,30 +21,33 @@ const (
 	sevenZipMaxHeader = 64 << 20
 )
 
-func checkSevenZipLimits(r io.ReaderAt, size int64) error {
+// checkSevenZipLimits walks a 7z's headers before the reader parses them, and
+// reports whether any folder is encrypted.
+func checkSevenZipLimits(r io.ReaderAt, size int64) (encrypted bool, err error) {
 	if size < 32 {
-		return errSevenZipHeader
+		return false, errSevenZipHeader
 	}
 
 	var start [32]byte
 	if _, err := io.ReadFull(io.NewSectionReader(r, 0, int64(len(start))), start[:]); err != nil {
-		return errSevenZipHeader
+		return false, errSevenZipHeader
 	}
 	nextOffset := binary.LittleEndian.Uint64(start[12:20])
 	nextSize := binary.LittleEndian.Uint64(start[20:28])
 	if nextOffset > uint64(size-32) || nextSize > uint64(size-32)-nextOffset {
-		return errSevenZipHeader
+		return false, errSevenZipHeader
 	}
 	offset, err := sevenZipInt64(nextOffset)
 	if err != nil {
-		return err
+		return false, err
 	}
 	length, err := sevenZipInt64(nextSize)
 	if err != nil {
-		return err
+		return false, err
 	}
 	c := sevenZipCursor{r: io.NewSectionReader(r, 32+offset, length), src: r, size: size}
-	return parseSevenZipHeader(&c)
+	err = parseSevenZipHeader(&c)
+	return c.aes, err
 }
 
 // sevenZipInt64 converts a header value already checked against the archive's
@@ -68,6 +67,8 @@ type sevenZipCursor struct {
 	size int64
 	// enc records the StreamsInfo of an encoded header while it is parsed.
 	enc *sevenZipEncoded
+	// aes is set once a folder of the archive's own entries is encrypted.
+	aes bool
 }
 
 func (c *sevenZipCursor) byte() (byte, error) {
@@ -310,6 +311,11 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 		return sevenZipFolder{}, errSevenZipHeader
 	}
 	var folder sevenZipFolder
+	// The coders of one folder are all alive while it decodes, so their
+	// memory adds up; and 7-Zip writes one compressor per folder, or three
+	// behind BCJ2, so a longer chain only multiplies work.
+	var memory uint64
+	compressors, bcj2 := 0, false
 	for range n {
 		main, err := c.byte()
 		if err != nil {
@@ -339,6 +345,16 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 		}
 		folder.inStreams += inStreams
 		folder.outStreams += outStreams
+		switch m := method[:idSize]; {
+		case bytes.Equal(m, sevenZipAES):
+			if c.enc == nil {
+				c.aes = true
+			}
+		case bytes.Equal(m, sevenZipBCJ2):
+			bcj2 = true
+		case !sevenZipFilter(m):
+			compressors++
+		}
 		if c.enc != nil {
 			c.enc.coders = append(c.enc.coders, sevenZipCoder{method: bytes.Clone(method[:idSize])})
 		}
@@ -354,8 +370,12 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 			if _, err := io.ReadFull(c.r, props); err != nil {
 				return sevenZipFolder{}, errSevenZipHeader
 			}
-			if err := checkSevenZipCoder(method[:idSize], propsSize, props); err != nil {
+			mem, err := checkSevenZipCoder(method[:idSize], propsSize, props)
+			if err != nil {
 				return sevenZipFolder{}, err
+			}
+			if memory += mem; memory > uint64(maxDecoderBytes) {
+				return sevenZipFolder{}, ErrDecoderMemory
 			}
 			if c.enc != nil {
 				c.enc.coders[len(c.enc.coders)-1].props = props
@@ -364,10 +384,13 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 			if err := c.skip(propsSize); err != nil {
 				return sevenZipFolder{}, err
 			}
-			if err := checkSevenZipCoder(method[:idSize], propsSize, nil); err != nil {
+			if _, err := checkSevenZipCoder(method[:idSize], propsSize, nil); err != nil {
 				return sevenZipFolder{}, err
 			}
 		}
+	}
+	if compressors > 1 && (!bcj2 || compressors > 3) {
+		return sevenZipFolder{}, errSevenZipHeader
 	}
 	bindPairs := folder.outStreams - 1
 	for range bindPairs {
@@ -395,29 +418,49 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 	return folder, nil
 }
 
-func checkSevenZipCoder(method []byte, propsSize uint64, props []byte) error {
+// checkSevenZipCoder reports the memory a coder's properties ask for: the LZMA
+// and LZMA2 dictionary, or PPMd's model size.
+func checkSevenZipCoder(method []byte, propsSize uint64, props []byte) (uint64, error) {
 	switch {
 	case bytes.Equal(method, []byte{0x21}):
 		if propsSize != 1 {
-			return errSevenZipHeader
+			return 0, errSevenZipHeader
 		}
 		p := props[0]
 		if p > 40 {
-			return errSevenZipHeader
+			return 0, errSevenZipHeader
 		}
 		dictCap := uint64(2|p&1) << (uint(p)/2 + 11)
 		if dictCap > uint64(maxDecoderBytes) {
-			return errSevenZipDecoderMemory
+			return 0, ErrDecoderMemory
 		}
+		return dictCap, nil
 	case bytes.Equal(method, []byte{0x03, 0x01, 0x01}), bytes.Equal(method, []byte{0x03, 0x04, 0x01}):
 		if propsSize != 5 {
-			return errSevenZipHeader
+			return 0, errSevenZipHeader
 		}
-		if uint64(binary.LittleEndian.Uint32(props[1:])) > uint64(maxDecoderBytes) {
-			return errSevenZipDecoderMemory
+		mem := uint64(binary.LittleEndian.Uint32(props[1:]))
+		if mem > uint64(maxDecoderBytes) {
+			return 0, ErrDecoderMemory
 		}
+		return mem, nil
 	}
-	return nil
+	return 0, nil
+}
+
+var sevenZipBCJ2 = []byte{0x03, 0x03, 0x01, 0x1B}
+
+// sevenZipFilter reports whether a coder transforms a stream without
+// compressing it: Delta, the branch converters and AES.
+func sevenZipFilter(method []byte) bool {
+	switch string(method) {
+	case "\x03", "\x0a", "\x0b",
+		"\x03\x03\x01\x03", "\x03\x03\x02\x05", "\x03\x03\x04\x01",
+		"\x03\x03\x05\x01", "\x03\x03\x07\x01", "\x03\x03\x08\x05",
+		"\x06\xf1\x07\x01":
+		return true
+	}
+	return false
 }
 
 func parseSevenZipStreamTail(c *sevenZipCursor, folders []sevenZipFolder) error {
@@ -553,10 +596,10 @@ func parseSevenZipEncodedHeader(c *sevenZipCursor) error {
 		return err
 	}
 	for _, coder := range enc.coders {
-		// An encrypted header cannot be read without the password; the reader
-		// refuses it as encrypted.
+		// Without a password the reader still decodes a header encrypted with an
+		// empty one, which would go unchecked.
 		if bytes.Equal(coder.method, sevenZipAES) {
-			return nil
+			return ErrEncrypted
 		}
 	}
 	header, err := enc.decode(c.src, c.size)
@@ -567,7 +610,9 @@ func parseSevenZipEncodedHeader(c *sevenZipCursor) error {
 	if id, err := hc.byte(); err != nil || id != 0x01 {
 		return errSevenZipHeader
 	}
-	return parseSevenZipMainHeader(&hc)
+	err = parseSevenZipMainHeader(&hc)
+	c.aes = hc.aes
+	return err
 }
 
 // decode unpacks the header with the one coder 7-Zip writes for it, whose

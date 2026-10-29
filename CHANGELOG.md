@@ -14,6 +14,8 @@ Notable changes to `go-archive`. The format follows
   extraction policy, bounded by `ListerOptions.MaxEntryBytes`.
 - `DeclaredSize` sums the sizes an archive's headers declare, bounded so a crafted RAR window cannot
   force the allocation its header names.
+- `ErrDecoderMemory` reports an archive whose decoder would need more than 256 MiB: a 7z or RAR
+  dictionary, or a zstd window. It is not `ErrMalformed`, because such an archive is valid.
 - `RecoverMalformed` turns a panic in a format reader into `ErrMalformed`, so a crafted download
   fails its item instead of ending the process.
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and

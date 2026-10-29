@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/bodgit/sevenzip"
 	"github.com/nwaples/rardecode/v2"
 )
 
@@ -124,7 +125,8 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 }
 
 func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {
-	if err := checkSevenZipLimits(src, size); err != nil {
+	encrypted, err := checkSevenZipLimits(src, size)
+	if err != nil {
 		return wrap("", err)
 	}
 	zr, err := openSevenZip(src, size)
@@ -135,11 +137,14 @@ func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) e
 		return &Error{Reason: ErrTooManyEntries}
 	}
 	charge := solidCharge{limits: limits}
-	for _, f := range zr.File {
+	folders := sevenZipFolders{files: zr.File, current: -1}
+	for i, f := range zr.File {
 		mode := f.Mode()
 		it := item{
 			Name: f.Name, Size: declared(f.UncompressedSize), IsDir: mode.IsDir(),
 			mode: mode,
+			// The reader marks no entry; any encrypted folder refuses them all.
+			encrypted: encrypted,
 		}
 		// The reader reports a missing digest as zero.
 		if f.CRC32 != 0 {
@@ -148,11 +153,90 @@ func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) e
 		if err := charge.add(it); err != nil {
 			return err
 		}
-		if err := fn(it, f.Open); err != nil {
+		if err := folders.enter(i); err != nil {
+			return err
+		}
+		if err := fn(it, folders.open(i)); err != nil {
 			return err
 		}
 	}
+	return folders.leave()
+}
+
+// sevenZipFolders closes each folder's decoder as the walk leaves it. The reader
+// keeps a decoder, dictionary and all, for any folder left partway through,
+// until the archive is dropped; reading the folder's last entry to its end
+// closes it instead. That reading is the solid decoding solidCharge counted.
+type sevenZipFolders struct {
+	files   []*sevenzip.File
+	current int // folder of the entries being walked, -1 before the first
+	last    int // index of the current folder's last entry with data
+	opened  bool
+	done    bool // the last entry was opened, so closing it ends the folder
+}
+
+func holdsData(f *sevenzip.File) bool { return f.UncompressedSize > 0 && !f.Mode().IsDir() }
+
+// enter moves to entry i, finishing the previous folder when i starts another.
+func (s *sevenZipFolders) enter(i int) error {
+	f := s.files[i]
+	if !holdsData(f) || f.Stream == s.current {
+		return nil
+	}
+	if err := s.leave(); err != nil {
+		return err
+	}
+	s.current, s.last, s.opened, s.done = f.Stream, i, false, false
+	for j := i + 1; j < len(s.files) && (!holdsData(s.files[j]) || s.files[j].Stream == f.Stream); j++ {
+		if holdsData(s.files[j]) {
+			s.last = j
+		}
+	}
 	return nil
+}
+
+// open is entry i's opener, whose reader reads to the entry's end on Close so
+// the decoder moves on to the next entry rather than staying parked mid-file.
+func (s *sevenZipFolders) open(i int) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) {
+		rc, err := s.files[i].Open()
+		if err != nil {
+			return nil, err
+		}
+		if holdsData(s.files[i]) {
+			s.opened = true
+			s.done = s.done || i == s.last
+		}
+		return drainOnClose{rc}, nil
+	}
+}
+
+// leave reads the current folder's last entry to its end when an earlier entry
+// left the decoder parked.
+func (s *sevenZipFolders) leave() error {
+	if !s.opened || s.done {
+		return nil
+	}
+	s.done = true
+	f := s.files[s.last]
+	rc, err := f.Open()
+	if err != nil {
+		return wrap(f.Name, err)
+	}
+	if err := (drainOnClose{rc}).Close(); err != nil {
+		return wrap(f.Name, err)
+	}
+	return nil
+}
+
+type drainOnClose struct{ io.ReadCloser }
+
+func (d drainOnClose) Close() error {
+	_, err := io.Copy(io.Discard, d.ReadCloser)
+	if cerr := d.ReadCloser.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func walkRAR(src io.Reader, limits walkLimits, fn walkFunc) error {
@@ -252,7 +336,7 @@ func rarMode(h *rardecode.FileHeader) fs.FileMode {
 // format.
 func tarMode(typeflag byte) fs.FileMode {
 	switch typeflag {
-	case tar.TypeReg, tar.TypeCont:
+	case tar.TypeReg, tar.TypeCont, tar.TypeGNUSparse:
 		return 0
 	case tar.TypeDir:
 		return fs.ModeDir

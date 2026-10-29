@@ -37,8 +37,12 @@ func isDeviceName(stem string) bool {
 	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
 		return true
 	}
-	return len(upper) == 4 && upper[3] >= '1' && upper[3] <= '9' &&
-		(strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT"))
+	port, ok := strings.CutPrefix(upper, "COM")
+	if !ok {
+		port, ok = strings.CutPrefix(upper, "LPT")
+	}
+	// The ports run 0 to 9, and Windows also reserves the superscript ¹, ² and ³.
+	return ok && utf8.RuneCountInString(port) == 1 && strings.ContainsAny(port, "0123456789¹²³")
 }
 
 // utf8Name is a zip entry's name as UTF-8. Zips written without the UTF-8 flag

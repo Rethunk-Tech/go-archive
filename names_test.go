@@ -9,11 +9,12 @@ func TestWindowsSegment(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
 		// Ordinary names.
-		"a.txt": true, "Mod": true, "run.sh": true, "com10.txt": true, "lpt0": true,
+		"a.txt": true, "Mod": true, "run.sh": true, "com10.txt": true, "lpt10": true,
 		"CONSOLE": true, "com1x": true, "null": true, "auxiliary": true,
 		"‘quoted’": true, "ファイル.txt": true, "a b": true, "a-b_c": true,
 
 		// Device names, matched on the stem so an extension does not rescue them.
+		"lpt0": false, "COM0.txt": false, "com¹": false, "LPT³.log": false,
 		"CON": false, "con": false, "CON.txt": false, "nul": false, "NUL.tar.gz": false,
 		"aux": false, "prn": false, "com1": false, "COM9.txt": false, "lpt1": false,
 		"LPT9.dll": false, "CONIN$": false, "CONOUT$": false, "CON ": false,

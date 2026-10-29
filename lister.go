@@ -132,6 +132,11 @@ func (l *Lister) Open() (_ io.ReadCloser, err error) {
 	if l.step.item.IsDir {
 		return io.NopCloser(strings.NewReader("")), nil
 	}
+	// Reading one costs a key derivation even when it then fails, and without
+	// a password nothing can be read from it.
+	if l.step.item.encrypted {
+		return nil, &Error{Entry: l.step.item.Name, Reason: ErrEncrypted}
+	}
 	rc, err := l.step.open()
 	if err != nil {
 		return nil, wrap(l.step.item.Name, err)

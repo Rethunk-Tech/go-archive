@@ -27,6 +27,7 @@ var (
 	ErrRatio             = errors.New("archive unpacks to far more than its size allows")
 	ErrChecksum          = errors.New("checksum mismatch")
 	ErrMalformed         = errors.New("archive is malformed")
+	ErrDecoderMemory     = errors.New("decoder memory exceeds the extraction cap")
 )
 
 // Error names the entry that failed and why. Entry is empty for a failure of
@@ -58,6 +59,8 @@ func wrap(entry string, err error) error {
 		err = ErrChecksum
 	case isReadError && re.Encrypted:
 		err = ErrEncrypted
+	case errors.Is(err, rardecode.ErrDictionaryTooLarge), errors.Is(err, zstd.ErrWindowSizeExceeded):
+		err = fmt.Errorf("%w: %w", ErrDecoderMemory, err)
 	}
 	return &Error{Entry: entry, Reason: err}
 }
