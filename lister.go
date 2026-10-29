@@ -62,7 +62,7 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 	if opts.MaxEntryBytes == 0 {
 		opts.MaxEntryBytes = maxDecoderBytes
 	}
-	if detectSource(src) == fmtNone {
+	if detectSource(src, baseName) == fmtNone {
 		return nil, &Error{Reason: ErrUnsupportedFormat}
 	}
 	l := &Lister{src: src, size: size, baseName: baseName, opts: opts}

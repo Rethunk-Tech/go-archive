@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -18,9 +19,10 @@ import (
 	"github.com/ulikunitz/xz/lzma"
 )
 
-// headLen is how much of a file's start detect reads: enough for the "ustar"
-// marker at offset 257 of a tar header.
-const headLen = 262
+// headLen is how much of a file's start detect reads: enough for a tar's
+// two-block end marker, which also covers the "ustar" marker at offset 257 of
+// a header.
+const headLen = 1024
 
 // tarOverhead is what a tar adds around each entry's bytes (header, padding),
 // counted into the stream's budget so skipped or unread data cannot decompress
@@ -75,6 +77,21 @@ func isTarHeader(head []byte) bool {
 	return len(head) >= 262 && bytes.Equal(head[257:262], []byte("ustar"))
 }
 
+// emptyTar reports a tar holding no entries: only the end marker of two zero
+// blocks. The name has to say tar as well, since a file of zeros is otherwise a
+// valid stream payload (the zero bomb) and no header says otherwise.
+func emptyTar(head []byte, baseName string) bool {
+	if len(head) < headLen || slices.ContainsFunc(head[:headLen], func(b byte) bool { return b != 0 }) {
+		return false
+	}
+	if _, original, ok := strings.Cut(baseName, "~~"); ok {
+		baseName = original
+	}
+	n := strings.ToLower(baseName)
+	return strings.Contains(n+".", ".tar.") || strings.HasSuffix(n, ".tgz") ||
+		strings.HasSuffix(n, ".tbz2") || strings.HasSuffix(n, ".txz") || strings.HasSuffix(n, ".tzst")
+}
+
 // limitReader fails with reason once more than its budget has been read,
 // whatever the stream claims.
 type limitReader struct {
@@ -121,18 +138,18 @@ type payload struct {
 // limits.budget bytes of decompressed output. The cap goes on the decoder here
 // rather than on what comes out of it, so a stream bomb stops at the bound
 // instead of decompressing unbounded and being rejected afterwards.
-func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
+func openPayload(r io.Reader, kind int, baseName string, limits walkLimits) (*payload, error) {
 	plain, closeFn, err := decoder(r, kind)
 	if err != nil {
 		return nil, wrap("", err)
 	}
 	br := bufio.NewReaderSize(&limitReader{r: plain, left: limits.budget, reason: limits.over}, 4096)
-	head, err := br.Peek(512)
+	head, err := br.Peek(headLen)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) && len(head) == 0 {
 		closeFn()
 		return nil, wrap("", err)
 	}
-	return &payload{r: br, isTar: kind == fmtTar || isTarHeader(head), close: closeFn}, nil
+	return &payload{r: br, isTar: kind == fmtTar || isTarHeader(head) || emptyTar(head, baseName), close: closeFn}, nil
 }
 
 // decoder decompresses r as kind, with the window or dictionary held to
@@ -219,7 +236,7 @@ func singleName(baseName string) string {
 // within the default caps; a stream over them reports the cap.
 func streamSize(r io.Reader, kind int, srcSize int64) (int64, error) {
 	opts := Options{}.withDefaults()
-	p, err := openPayload(r, kind, opts.streamLimits(srcSize))
+	p, err := openPayload(r, kind, "", opts.streamLimits(srcSize))
 	if err != nil {
 		return 0, err
 	}

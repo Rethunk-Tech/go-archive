@@ -8,6 +8,7 @@ Notable changes to `go-archive`. The format follows
 
 ### Fixed
 
+- An empty tar, only its end marker, lists and extracts as zero entries instead of `ErrUnsupportedFormat`, bare or inside a stream, when its name says tar.
 - `NOTICE` carries the BSD 2-Clause licence of the vendored rardecode, which binaries built with this module must reproduce.
 
 ## [0.1.0] - 2026-10-28

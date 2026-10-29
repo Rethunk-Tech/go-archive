@@ -12,7 +12,7 @@ import (
 func DeclaredSize(src Source, size int64) (_ int64, err error) {
 	defer RecoverMalformed(&err)
 
-	switch kind := detectSource(src); kind {
+	switch kind := detectSource(src, ""); kind {
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2, fmtLz4:
 		return streamSize(io.NewSectionReader(src, 0, size), kind, size)
 	}

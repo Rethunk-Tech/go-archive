@@ -33,8 +33,12 @@ func detect(head []byte) int {
 
 // detectSource is detect over the first headLen bytes, read through a section
 // reader so the caller's offset is untouched.
-func detectSource(src io.ReaderAt) int {
+func detectSource(src io.ReaderAt, baseName string) int {
 	var magic [headLen]byte
 	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
-	return detect(magic[:n])
+	kind := detect(magic[:n])
+	if kind == fmtNone && emptyTar(magic[:n], baseName) {
+		return fmtTar
+	}
+	return kind
 }

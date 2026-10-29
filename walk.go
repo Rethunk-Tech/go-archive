@@ -58,7 +58,7 @@ func walk(src Source, size int64, baseName string, limits walkLimits, visit walk
 		}
 		return visit(it, open)
 	}
-	kind := detectSource(src)
+	kind := detectSource(src, baseName)
 	switch kind {
 	case fmtZip:
 		return walkZip(src, size, limits, fn)
@@ -312,7 +312,7 @@ func walkRAR(src io.Reader, limits walkLimits, fn walkFunc) error {
 }
 
 func walkStream(src io.Reader, kind int, baseName string, limits walkLimits, fn walkFunc) error {
-	p, err := openPayload(src, kind, limits)
+	p, err := openPayload(src, kind, baseName, limits)
 	if err != nil {
 		return err
 	}

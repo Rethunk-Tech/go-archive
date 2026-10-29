@@ -80,7 +80,7 @@ func TestStreamBudgetPastTheRatioFailsWithErrRatio(t *testing.T) {
 	// A small source's ratio cap is the 2 GiB floor, far above this payload, so
 	// lowered caps exercise the bound the extractor would apply.
 	limits := Options{MaxEntries: 1, MaxRatio: 1, RatioFloor: 1 << 20}.withDefaults().streamLimits(int64(buf.Len()))
-	p, err := openPayload(bytes.NewReader(buf.Bytes()), fmtGzip, limits)
+	p, err := openPayload(bytes.NewReader(buf.Bytes()), fmtGzip, "", limits)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -870,3 +870,33 @@ func TestSolidRARExtractsAndSkips(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyTarIsAnArchiveWithNoEntries(t *testing.T) {
+	t.Parallel()
+	var tarBuf, gzBuf bytes.Buffer
+	if err := tar.NewWriter(&tarBuf).Close(); err != nil {
+		t.Fatal(err)
+	}
+	zw := gzip.NewWriter(&gzBuf)
+	_, _ = zw.Write(tarBuf.Bytes())
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{"e.tar": tarBuf.Bytes(), "e.tar.gz": gzBuf.Bytes()} {
+		dest, err := extractDir(t, writeTemp(t, name, b), Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got, _ := os.ReadDir(dest); len(got) != 0 {
+			t.Errorf("%s extracted %d entries", name, len(got))
+		}
+		if got := names(t, openListerPath(t, writeTemp(t, name, b), ListerOptions{})); len(got) != 0 {
+			t.Errorf("%s listed %d entries", name, len(got))
+		}
+	}
+	// The name is what separates an empty tar from zeros that are not one.
+	_, err := extractDir(t, writeTemp(t, "zeros.bin", make([]byte, 1024)), Options{})
+	wantReason(t, err, ErrUnsupportedFormat, "")
+	_, err = extractDir(t, writeTemp(t, "short.tar", make([]byte, 512)), Options{})
+	wantReason(t, err, ErrUnsupportedFormat, "")
+}
