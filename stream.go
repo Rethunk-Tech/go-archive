@@ -20,10 +20,6 @@ import (
 // marker at offset 257 of a tar header.
 const headLen = 262
 
-// dictLimit caps a decompressor's window, so a header cannot make it allocate
-// more than maxDecoderBytes.
-const dictLimit = maxDecoderBytes
-
 // tarOverhead is what a tar adds around each entry's bytes (header, padding),
 // counted into the stream's budget so skipped or unread data cannot decompress
 // without bound.
@@ -134,13 +130,13 @@ func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
 		}
 		plain, closeFn = zr, func() { _ = zr.Close() }
 	case fmtXz:
-		xr, err := xz.ReaderConfig{DictCap: int(dictLimit)}.NewReader(r)
+		xr, err := xz.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
 		if err != nil {
 			return nil, wrap("", err)
 		}
 		plain = xr
 	case fmtLzma:
-		lr, err := lzma.ReaderConfig{DictCap: int(dictLimit)}.NewReader(r)
+		lr, err := lzma.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
 		if err != nil {
 			return nil, wrap("", err)
 		}
@@ -148,8 +144,8 @@ func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
 	case fmtZstd:
 		zr, err := zstd.NewReader(r,
 			zstd.WithDecoderConcurrency(1),
-			zstd.WithDecoderMaxMemory(uint64(dictLimit)),
-			zstd.WithDecoderMaxWindow(uint64(dictLimit)))
+			zstd.WithDecoderMaxMemory(uint64(maxDecoderBytes)),
+			zstd.WithDecoderMaxWindow(uint64(maxDecoderBytes)))
 		if err != nil {
 			return nil, wrap("", err)
 		}

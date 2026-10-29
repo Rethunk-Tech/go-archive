@@ -19,9 +19,6 @@ type item struct {
 	encrypted bool
 	linkType  int
 	crc       *uint32
-	// skip marks an entry that names no file of its own, so neither entry point
-	// reports it.
-	skip bool
 }
 
 // walkFunc receives one entry and a reader for its bytes. The reader is valid
@@ -80,7 +77,7 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 	for _, f := range zr.File {
 		mode := f.Mode()
 		it := item{
-			Name: zipName(f), Size: declared(f.UncompressedSize64), IsDir: mode.IsDir(),
+			Name: utf8Name(f.Name), Size: declared(f.UncompressedSize64), IsDir: mode.IsDir(),
 			mode:      mode,
 			encrypted: f.Flags&1 != 0,
 			crc:       &f.CRC32,
@@ -166,13 +163,12 @@ func walkStream(src io.Reader, kind int, baseName string, limits walkLimits, fn 
 			return wrap("", err)
 		}
 		// A pax global header describes the entries after it and names no file.
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
 		it := item{
 			Name: h.Name, Size: max(h.Size, 0), IsDir: h.Typeflag == tar.TypeDir,
 			mode: tarMode(h.Typeflag),
-			skip: h.Typeflag == tar.TypeXGlobalHeader,
-		}
-		if it.skip {
-			continue
 		}
 		if err := fn(it, func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }); err != nil {
 			return err

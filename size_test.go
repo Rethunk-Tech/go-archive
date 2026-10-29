@@ -65,10 +65,9 @@ func TestDeclaredSizeRefusesACraftedRARWindow(t *testing.T) {
 	}
 }
 
-// A stream over the caps reports the cap rather than failing, so a caller sizing
-// a preview gets a number it can show. The budget is forced below the payload, so
-// the cap branch runs rather than the count coming back plain.
-func TestDeclaredSizeReportsTheCapForAnOverCapStream(t *testing.T) {
+// Past the ratio a stream fails with ErrRatio, which streamSize turns into the
+// cap it reports rather than an error.
+func TestStreamBudgetPastTheRatioFailsWithErrRatio(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)

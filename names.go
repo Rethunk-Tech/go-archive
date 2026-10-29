@@ -1,7 +1,6 @@
 package archive
 
 import (
-	"archive/zip"
 	"path"
 	"strings"
 	"unicode/utf8"
@@ -42,12 +41,10 @@ func isDeviceName(stem string) bool {
 		(strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT"))
 }
 
-// zipName is an entry's name as UTF-8. Zips written without the UTF-8 flag carry
-// names in the writer's locale, most often GBK from Chinese-locale tools, which
-// GB18030 decodes. Left as raw bytes the name extracts to a directory the
+// utf8Name is a zip entry's name as UTF-8. Zips written without the UTF-8 flag
+// carry names in the writer's locale, most often GBK from Chinese-locale tools,
+// which GB18030 decodes. Left as raw bytes the name extracts to a directory the
 // caller's own runtime cannot open.
-func zipName(f *zip.File) string { return utf8Name(f.Name) }
-
 func utf8Name(name string) string {
 	if utf8.ValidString(name) {
 		return name

@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"io"
 	"os"
@@ -32,16 +31,8 @@ func openListerPath(t *testing.T, path string, opts ListerOptions) *Lister {
 
 func openListerOpts(t *testing.T, path string, opts ListerOptions) (*Lister, error) {
 	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return NewLister(f, info.Size(), filepath.Base(path), opts)
+	f, size := openSized(t, path)
+	return NewLister(f, size, filepath.Base(path), opts)
 }
 
 // names drains the Lister and returns each entry it reported.
@@ -216,15 +207,7 @@ func TestListerEntriesDrainsOnlyABareStream(t *testing.T) {
 // The bound is on the reader Open hands out, so a bomb fails there.
 func TestListerMaxEntryBytesStopsAStreamBomb(t *testing.T) {
 	t.Parallel()
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(make([]byte, 8<<20)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	src := writeTemp(t, "bomb.gz", buf.Bytes())
+	src := gzipOfZeros(t, "bomb.gz", 8<<20)
 	l := openListerPath(t, src, ListerOptions{MaxEntryBytes: 1 << 20})
 	if _, err := l.Next(); err != nil {
 		t.Fatal(err)
@@ -304,16 +287,8 @@ func TestListerUnsupportedFormat(t *testing.T) {
 func TestListerCloseIsIdempotentAndLeavesTheSourceOpen(t *testing.T) {
 	t.Parallel()
 	path := buildZip(t, zentry{name: "a.txt", body: "a"})
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := NewLister(f, info.Size(), "a.zip", ListerOptions{})
+	f, size := openSized(t, path)
+	l, err := NewLister(f, size, "a.zip", ListerOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

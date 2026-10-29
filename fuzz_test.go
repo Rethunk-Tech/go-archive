@@ -97,21 +97,13 @@ func extractFuzzed(t *testing.T, archive []byte) {
 // dest is a finding, and checkExtracted is what proves the latter.
 func extractPath(t *testing.T, src, dest string) {
 	t.Helper()
-	f, err := os.Open(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
+	f, size := openSized(t, src)
 	root, err := os.OpenRoot(dest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	_ = Extract(f, info.Size(), filepath.Base(src), root, Options{
+	_ = Extract(f, size, filepath.Base(src), root, Options{
 		MaxEntryBytes: 1 << 20,
 		MaxTotalBytes: 4 << 20,
 		MaxEntries:    200,
@@ -122,16 +114,8 @@ func extractPath(t *testing.T, src, dest string) {
 // readers a preview would and must fail rather than panic.
 func listFuzzed(t *testing.T, src string) {
 	t.Helper()
-	f, err := os.Open(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := NewLister(f, info.Size(), filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
+	f, size := openSized(t, src)
+	l, err := NewLister(f, size, filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
 	if err != nil {
 		return
 	}
@@ -145,16 +129,8 @@ func listFuzzed(t *testing.T, src string) {
 
 func sizeFuzzed(t *testing.T, src string) {
 	t.Helper()
-	f, err := os.Open(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = DeclaredSize(f, info.Size())
+	f, size := openSized(t, src)
+	_, _ = DeclaredSize(f, size)
 }
 
 // FuzzExtract feeds raw bytes, seeded with every format's fixtures, through the format detection and readers.
@@ -336,23 +312,8 @@ func listByEntries(t *testing.T, src string) (int64, int, error) {
 
 func openLister(t *testing.T, src string) (*Lister, error) {
 	t.Helper()
-	f, err := os.Open(src)
-	if err != nil {
-		return nil, err
-	}
-	// Lister.Close never closes the caller's Source, so the harness closes it.
-	// Windows refuses to delete a file that still has an open handle, which
-	// fails TempDir cleanup rather than the test.
-	t.Cleanup(func() { _ = f.Close() })
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	l, err := NewLister(f, info.Size(), filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
-	if err != nil {
-		return nil, err
-	}
-	return l, nil
+	f, size := openSized(t, src)
+	return NewLister(f, size, filepath.Base(src), ListerOptions{MaxEntryBytes: 1 << 20})
 }
 
 // normalised reports whether name carries neither a backslash nor a trailing

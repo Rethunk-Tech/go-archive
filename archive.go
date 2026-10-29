@@ -106,12 +106,7 @@ type Source interface {
 // the first failure and leaves what it wrote in dest, so the caller passes a
 // temp directory and discards it on error. A zero Options field means its
 // default.
-func Extract(src Source, size int64, baseName string, dest *os.Root, opts Options) error {
-	return extract(src, size, baseName, dest, opts)
-}
-
-// extract is Extract with caps the tests lower.
-func extract(src Source, size int64, baseName string, dest *os.Root, opts Options) (err error) {
+func Extract(src Source, size int64, baseName string, dest *os.Root, opts Options) (err error) {
 	defer RecoverMalformed(&err)
 
 	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}

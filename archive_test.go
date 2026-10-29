@@ -66,21 +66,13 @@ func extractDir(t *testing.T, archive string, opts Options) (string, error) {
 // precondition os.OpenRoot carries.
 func extractWith(t *testing.T, archive, dest string, opts Options) error {
 	t.Helper()
-	f, err := os.Open(archive)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
+	f, size := openSized(t, archive)
 	root, err := os.OpenRoot(dest)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	return Extract(f, info.Size(), filepath.Base(archive), root, opts)
+	return Extract(f, size, filepath.Base(archive), root, opts)
 }
 
 func wantReason(t *testing.T, err, reason error, entry string) {
@@ -603,7 +595,7 @@ func TestStreamFormatsExtractATarByMagicBytes(t *testing.T) {
 			if got := readFile(t, filepath.Join(dest, "Mod", "Fix.dll")); got != "dll" {
 				t.Fatalf("Fix.dll = %q", got)
 			}
-			listed, err := listNames(writeTemp(t, "download", src))
+			listed, err := listNames(t, writeTemp(t, "download", src))
 			if err != nil {
 				t.Fatalf("listing: %v", err)
 			}
@@ -665,15 +657,7 @@ func TestStreamFormatsHonourTheSizeAndEntryCaps(t *testing.T) {
 // A gzip of zeros unpacks to far more than the cap; the stream's own budget stops it before the disk fills.
 func TestStreamBombIsStoppedByTheDecompressionBudget(t *testing.T) {
 	t.Parallel()
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(make([]byte, 8<<20)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_, err := extractDir(t, writeTemp(t, "bomb.gz", buf.Bytes()), Options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 1 << 20, MaxEntries: 10})
+	_, err := extractDir(t, gzipOfZeros(t, "bomb.gz", 8<<20), Options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 1 << 20, MaxEntries: 10})
 	if !errors.Is(err, ErrEntryTooLarge) && !errors.Is(err, ErrArchiveTooLarge) {
 		t.Fatalf("got %v", err)
 	}
@@ -701,15 +685,7 @@ func TestDefaultCapsAreFarAboveRealPackagesAndDecoderMemoryStaysSmall(t *testing
 
 func TestRatioGuardStopsATinyArchiveClaimingALot(t *testing.T) {
 	t.Parallel()
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(make([]byte, 8<<20)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	src := writeTemp(t, "ratio.gz", buf.Bytes())
+	src := gzipOfZeros(t, "ratio.gz", 8<<20)
 	_, err := extractDir(t, src, Options{MaxRatio: 10, RatioFloor: 1 << 10})
 	if !errors.Is(err, ErrRatio) {
 		t.Fatalf("got %v, want ErrRatio", err)
@@ -721,17 +697,9 @@ func TestRatioGuardStopsATinyArchiveClaimingALot(t *testing.T) {
 
 // listNames drains a Lister over path and returns the names it reported,
 // normalised by Next.
-func listNames(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	l, err := NewLister(f, info.Size(), filepath.Base(path), ListerOptions{MaxEntryBytes: 8 << 20})
+func listNames(t *testing.T, path string) ([]string, error) {
+	f, size := openSized(t, path)
+	l, err := NewLister(f, size, filepath.Base(path), ListerOptions{MaxEntryBytes: 8 << 20})
 	if err != nil {
 		return nil, err
 	}
@@ -752,16 +720,8 @@ func listNames(path string) ([]string, error) {
 // declaredSize opens path and reports what its headers declare.
 func declaredSize(t *testing.T, path string) (int64, error) {
 	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	return DeclaredSize(f, info.Size())
+	f, size := openSized(t, path)
+	return DeclaredSize(f, size)
 }
 
 // tarGzOfZeros is a gzipped tar holding one regular entry of size zero bytes.
@@ -809,4 +769,33 @@ func TestMaxInt64CapsStillWriteTheEntry(t *testing.T) {
 	if got := readFile(t, filepath.Join(dest, "a.txt")); got != "hello" {
 		t.Fatalf("a.txt = %q", got)
 	}
+}
+
+// gzipOfZeros writes n zero bytes gzipped under name, a bomb at any ratio a test sets.
+func gzipOfZeros(t *testing.T, name string, n int) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(make([]byte, n)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return writeTemp(t, name, buf.Bytes())
+}
+
+// openSized opens a fixture and reports its size; the file closes when the test ends.
+func openSized(t *testing.T, path string) (*os.File, int64) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, info.Size()
 }
