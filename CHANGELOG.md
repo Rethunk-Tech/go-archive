@@ -6,6 +6,12 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-29
+
+### Changed
+
+- The copyright holder is Rethunk.Tech, LLC.
+
 ### Fixed
 
 - An empty tar, only its end marker, lists and extracts as zero entries instead of `ErrUnsupportedFormat`, bare or inside a stream, when its name says tar.
@@ -31,5 +37,6 @@ Notable changes to `go-archive`. The format follows
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
 
-[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rethunk-Tech/go-archive/releases/tag/v0.1.0
