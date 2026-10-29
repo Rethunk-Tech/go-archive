@@ -109,6 +109,9 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 	if limits.tooMany(len(zr.File)) {
 		return &Error{Reason: ErrTooManyEntries}
 	}
+	for method, kind := range zipMethods {
+		zr.RegisterDecompressor(method, zipDecompressor(kind))
+	}
 	for _, f := range zr.File {
 		mode := f.Mode()
 		it := item{

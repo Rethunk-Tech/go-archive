@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"compress/bzip2"
@@ -118,40 +119,9 @@ type payload struct {
 // rather than on what comes out of it, so a stream bomb stops at the bound
 // instead of decompressing unbounded and being rejected afterwards.
 func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
-	closeFn := func() {}
-	var plain io.Reader
-	switch kind {
-	case fmtTar:
-		plain = r
-	case fmtGzip:
-		zr, err := gzip.NewReader(r)
-		if err != nil {
-			return nil, wrap("", err)
-		}
-		plain, closeFn = zr, func() { _ = zr.Close() }
-	case fmtXz:
-		xr, err := xz.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
-		if err != nil {
-			return nil, wrap("", err)
-		}
-		plain = xr
-	case fmtLzma:
-		lr, err := lzma.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
-		if err != nil {
-			return nil, wrap("", err)
-		}
-		plain = lr
-	case fmtZstd:
-		zr, err := zstd.NewReader(r,
-			zstd.WithDecoderConcurrency(1),
-			zstd.WithDecoderMaxMemory(uint64(maxDecoderBytes)),
-			zstd.WithDecoderMaxWindow(uint64(maxDecoderBytes)))
-		if err != nil {
-			return nil, wrap("", err)
-		}
-		plain, closeFn = zr, zr.Close
-	case fmtBzip2:
-		plain = bzip2.NewReader(r)
+	plain, closeFn, err := decoder(r, kind)
+	if err != nil {
+		return nil, wrap("", err)
 	}
 	br := bufio.NewReaderSize(&limitReader{r: plain, left: limits.budget, reason: limits.over}, 4096)
 	head, err := br.Peek(512)
@@ -160,6 +130,70 @@ func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
 		return nil, wrap("", err)
 	}
 	return &payload{r: br, isTar: kind == fmtTar || isTarHeader(head), close: closeFn}, nil
+}
+
+// decoder decompresses r as kind, with the window or dictionary held to
+// maxDecoderBytes, and returns what releases it.
+func decoder(r io.Reader, kind int) (io.Reader, func(), error) {
+	switch kind {
+	case fmtGzip:
+		zr, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		return zr, func() { _ = zr.Close() }, nil
+	case fmtXz:
+		xr, err := xz.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
+		return xr, func() {}, err
+	case fmtLzma:
+		lr, err := lzma.ReaderConfig{DictCap: int(maxDecoderBytes)}.NewReader(r)
+		return lr, func() {}, err
+	case fmtZstd:
+		zr, err := zstd.NewReader(r,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderMaxMemory(uint64(maxDecoderBytes)),
+			zstd.WithDecoderMaxWindow(uint64(maxDecoderBytes)))
+		if err != nil {
+			return nil, nil, err
+		}
+		return zr, zr.Close, nil
+	case fmtBzip2:
+		return bzip2.NewReader(r), func() {}, nil
+	}
+	return r, func() {}, nil
+}
+
+// zipMethods are the zip compression methods beyond Deflate that 7-Zip and
+// WinZip write and a stream decoder here already reads.
+var zipMethods = map[uint16]int{12: fmtBzip2, 93: fmtZstd, 95: fmtXz}
+
+// zipDecompressor adapts decoder to archive/zip, which wants a reader back
+// whatever happens; a decoder that cannot start fails on the first Read.
+func zipDecompressor(kind int) zip.Decompressor {
+	return func(r io.Reader) io.ReadCloser {
+		plain, closeFn, err := decoder(r, kind)
+		return zipDecoder{r: plain, close: closeFn, err: err}
+	}
+}
+
+type zipDecoder struct {
+	r     io.Reader
+	close func()
+	err   error
+}
+
+func (d zipDecoder) Read(p []byte) (int, error) {
+	if d.err != nil {
+		return 0, d.err
+	}
+	return d.r.Read(p)
+}
+
+func (d zipDecoder) Close() error {
+	if d.close != nil {
+		d.close()
+	}
+	return nil
 }
 
 // singleName is the name a bare compressed file lists under: the name the

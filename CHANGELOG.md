@@ -9,7 +9,8 @@ Notable changes to `go-archive`. The format follows
 ### Added
 
 - `Extract` reads zip, RAR 4, RAR 5, 7z, tar, and gzip, xz, lzma, zstd or bzip2 alone or around a
-  tar, writing through a caller-supplied `*os.Root`.
+  tar, writing through a caller-supplied `*os.Root`. Zip entries may be stored, Deflate, bzip2, xz
+  or zstd.
 - `Lister` walks any of those formats forward-only for callers that want names and sizes without
   extraction policy, bounded by `ListerOptions.MaxEntryBytes`.
 - `DeclaredSize` sums the sizes an archive's headers declare, bounded so a crafted RAR window cannot

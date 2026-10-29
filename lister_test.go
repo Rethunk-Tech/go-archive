@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // openZipLister writes entries as a zip and returns a Lister over it.
@@ -502,4 +504,40 @@ func TestListerEntriesBoundsABareStream(t *testing.T) {
 		return
 	}
 	t.Fatal("Entries yielded nothing")
+}
+
+// 7-Zip and WinZip write zip entries with bzip2, xz and zstd; each reads with the
+// stream decoder of the same name.
+func TestZipCompressionMethodsBeyondDeflate(t *testing.T) {
+	t.Parallel()
+	want := strings.Repeat("zstd in a zip\n", 200)
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zw.RegisterCompressor(93, func(w io.Writer) (io.WriteCloser, error) { return zstd.NewWriter(w) })
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "z.txt", Method: 93})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(w, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dest, err := extractDir(t, writeTemp(t, "zstd.zip", buf.Bytes()), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(dest, "z.txt")); got != want {
+		t.Fatalf("zstd entry read %d bytes", len(got))
+	}
+	for _, name := range []string{"method-bzip2.zip", "method-xz.zip"} {
+		dest, err := extractDir(t, filepath.Join("testdata", name), Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := readFile(t, filepath.Join(dest, "nums.txt")); !strings.HasPrefix(got, "1\n2\n") || !strings.HasSuffix(got, "20000\n") {
+			t.Fatalf("%s: nums.txt is %d bytes", name, len(got))
+		}
+	}
 }
