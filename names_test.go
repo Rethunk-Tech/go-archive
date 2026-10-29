@@ -126,7 +126,7 @@ func TestSingleNameKeepsTheWholeName(t *testing.T) {
 func TestExtensionTable(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name, stem   string
+		name, stem  string
 		has, stream bool
 	}{
 		{"a.tar.lz4", "a", true, false},

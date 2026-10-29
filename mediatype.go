@@ -2,29 +2,31 @@ package archive
 
 import "mime"
 
-// mediaTypes are the Content-Type values uploaders and MIME databases give the
-// formats this package reads. application/octet-stream is absent: it means the
-// sender did not know.
-var mediaTypes = map[string]bool{
-	"application/zip": true, "application/x-zip-compressed": true,
-	"application/vnd.rar": true, "application/x-rar": true, "application/x-rar-compressed": true,
-	"application/x-7z-compressed": true,
-	"application/x-tar": true, "application/x-gtar": true,
-	"application/gzip": true, "application/x-gzip": true,
-	"application/x-xz": true, "application/x-lzma": true,
-	"application/zstd": true, "application/x-zstd": true,
-	"application/x-bzip": true, "application/x-bzip2": true,
-	"application/x-lz4": true,
-	"application/x-compressed-tar": true, "application/x-gzip-compressed-tar": true,
-	"application/x-xz-compressed-tar": true, "application/x-lzma-compressed-tar": true,
-	"application/x-zstd-compressed-tar": true, "application/x-bzip-compressed-tar": true,
-	"application/x-bzip1-compressed-tar": true, "application/x-bzip2-compressed-tar": true,
-	"application/x-lz4-compressed-tar": true,
-}
-
-// IsMediaType reports whether contentType names a format this package reads.
-// Parameters and case do not matter.
+// IsMediaType reports whether contentType names a format this package reads,
+// under the types uploaders and MIME databases give them. Parameters and case
+// do not matter. application/octet-stream is not one: it means the sender did
+// not know.
 func IsMediaType(contentType string) bool {
 	mt, _, err := mime.ParseMediaType(contentType)
-	return err == nil && mediaTypes[mt]
+	if err != nil {
+		return false
+	}
+	switch mt {
+	case "application/zip", "application/x-zip-compressed",
+		"application/vnd.rar", "application/x-rar", "application/x-rar-compressed",
+		"application/x-7z-compressed",
+		"application/x-tar", "application/x-gtar",
+		"application/gzip", "application/x-gzip",
+		"application/x-xz", "application/x-lzma",
+		"application/zstd", "application/x-zstd",
+		"application/x-bzip", "application/x-bzip2",
+		"application/x-lz4",
+		"application/x-compressed-tar", "application/x-gzip-compressed-tar",
+		"application/x-xz-compressed-tar", "application/x-lzma-compressed-tar",
+		"application/x-zstd-compressed-tar", "application/x-lz4-compressed-tar",
+		"application/x-bzip-compressed-tar", "application/x-bzip1-compressed-tar",
+		"application/x-bzip2-compressed-tar":
+		return true
+	}
+	return false
 }
