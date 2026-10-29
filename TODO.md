@@ -1,24 +1,5 @@
 # TODO
 
-## Migrate Mortar onto this module
-
-Deferred. `Rethunk-Tech/mortar` still reads archives through its own
-`internal/archive` and does not require this module.
-
-1. Replace those bodies with a facade over this module. Keep the path-based
-   `Extract`, `DeclaredSize`, `PreviewArchive` and `RecoverMalformed`.
-   `Rethunk-Tech/mortar` `internal/sharesvc/collection_details.go` calls
-   `OpenSevenZip`; this module does not export a 7z reader, so that call
-   moves onto `Lister`. Keep `StripExtension`, `HasExtension`,
-   `PickerPattern`, `SavedName` and `SavedID` (`Rethunk-Tech/mortar` `internal/archive/formats.go`).
-   Name the preview bound. Add the
-   `WindowsSegment` / `winname.Valid` agreement test. Drop the five decoder
-   requirements from Mortar's go.mod.
-2. Then update the docs that still describe the copy:
-   `Rethunk-Tech/mortar` `docs/security.md`
-   `Rethunk-Tech/mortar` `docs/architecture.md`
-   `Rethunk-Tech/mortar` `docs/testing.md`
-
 ## A 7z over `DefaultMaxEntries` fails as `ErrMalformed`
 
 `sevenZipMaxFolders` is `DefaultMaxEntries` (`sevenzip_limits.go`), so the
