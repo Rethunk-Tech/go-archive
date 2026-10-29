@@ -256,3 +256,48 @@ func TestGNUSparseTarEntryIsARegularFile(t *testing.T) {
 		t.Fatalf("tarMode(GNU sparse) = %v, want a regular file", m)
 	}
 }
+
+// 7-Zip's BCJ2 folder joins four coders and three compressors through bind
+// pairs, the one chain the folder rules allow past a single compressor.
+func TestSevenZipBCJ2Extracts(t *testing.T) {
+	t.Parallel()
+	dest, err := extractDir(t, filepath.Join("testdata", "bcj2.7z"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(dest, "prog.bin")); err != nil || info.Size() != 40000 {
+		t.Fatalf("prog.bin: %v, %v", info, err)
+	}
+}
+
+// Leaving a solid folder partway reads its last entry to the end, so the walk
+// goes on to report the rest and nothing fails along the way.
+func TestListerLeavesASolidFolderReadPartway(t *testing.T) {
+	t.Parallel()
+	l := openListerPath(t, filepath.Join("testdata", "solid-zeros.7z"), ListerOptions{})
+	read, seen := false, 0
+	for {
+		e, err := l.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if e.IsDir || read {
+			continue
+		}
+		rc, err := l.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(rc, make([]byte, 1)); err != nil {
+			t.Fatal(err)
+		}
+		read = true
+	}
+	if !read || seen != 2 {
+		t.Fatalf("read %v across %d entries", read, seen)
+	}
+}
