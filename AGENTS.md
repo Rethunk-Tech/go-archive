@@ -37,6 +37,7 @@ bound is policy.
 | File | Holds |
 | --- | --- |
 | `archive.go` | package doc, cap constants, `Options`, `Source`, `Extract` |
+| `errors.go` | the `Err*` sentinels, `Error` (an entry name with its reason) and `wrap` |
 | `walk.go` | `walk`, per-format enumerators, entry-mode mapping |
 | `extract.go` | name admission, case collisions, writing, byte caps |
 | `stream.go` | streaming-format detection, decoder window, stream budget |
