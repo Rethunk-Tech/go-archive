@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"errors"
@@ -335,4 +336,58 @@ func openLister(t *testing.T, src string) (*Lister, error) {
 // slash, the shape Lister promises.
 func normalised(name string) bool {
 	return !strings.Contains(name, `\`) && !strings.HasSuffix(name, "/")
+}
+
+// FuzzExtractReader streams a tar of two entries with fuzzed names, kinds and
+// link targets: nothing may land outside the destination, and nothing but
+// folders and regular files inside it.
+func FuzzExtractReader(f *testing.F) {
+	for _, s := range []struct {
+		a, b, link string
+		kind       byte
+	}{
+		{"pkg/mod/a.dll", "pkg/mod/b.json", "", tar.TypeReg},
+		{"../evil", "x", "", tar.TypeReg},
+		{"link", "link/x", "/tmp", tar.TypeSymlink},
+		{"hard", "y", "../sentinel/z", tar.TypeLink},
+		{"d", "d/../../x", "", tar.TypeDir},
+		{`a\..\..\x`, "/abs", "", tar.TypeReg},
+		{"fifo", "z", "", tar.TypeFifo},
+	} {
+		f.Add(s.a, s.b, s.link, s.kind, []byte("data"))
+	}
+	f.Fuzz(func(t *testing.T, a, b, link string, kind byte, data []byte) {
+		var buf bytes.Buffer
+		w := tar.NewWriter(&buf)
+		for i, name := range []string{a, b} {
+			h := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(data))}
+			if i == 0 {
+				h.Typeflag, h.Linkname = kind, link
+				if kind != tar.TypeReg {
+					h.Size = 0
+				}
+			}
+			if w.WriteHeader(h) != nil {
+				return
+			}
+			_, _ = w.Write(data[:h.Size])
+		}
+		if w.Close() != nil {
+			return
+		}
+		parent := t.TempDir()
+		dest := filepath.Join(parent, "dest")
+		for _, d := range []string{dest, filepath.Join(parent, "sentinel")} {
+			if err := os.Mkdir(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		root, err := os.OpenRoot(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = ExtractReader(&buf, "item.tar", root, fuzzOptions)
+		_ = root.Close()
+		checkExtracted(t, parent, dest)
+	})
 }

@@ -10,6 +10,8 @@
 package archive
 
 import (
+	"bufio"
+	"errors"
 	"io"
 	"os"
 )
@@ -133,6 +135,29 @@ func ExtractFunc(src Source, size int64, baseName string, opts Options,
 ) (err error) {
 	defer RecoverMalformed(&err)
 	return newExtractor(opts, size, fn).run(src, size, baseName)
+}
+
+// ExtractReader is Extract for a stream with no random access and no known
+// size: RAR, tar, and gzip, xz, lzma, zstd, bzip2 or lz4, alone or around a tar.
+// Zip and 7z need a Source and fail with ErrUnsupportedFormat. With the size
+// unknown no ratio applies, so MaxTotalBytes is the bound. A read error from r
+// ends extraction and is returned in the chain; a body that ends before its
+// format can be told apart fails as io.ErrUnexpectedEOF, so a caller can treat
+// it as a dropped connection.
+func ExtractReader(r io.Reader, baseName string, dest *os.Root, opts Options) (err error) {
+	defer RecoverMalformed(&err)
+	br := bufio.NewReaderSize(r, headLen)
+	head, err := br.Peek(headLen)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	kind := detectNamed(head, baseName)
+	if kind == fmtNone && len(head) < headLen {
+		return &Error{Reason: io.ErrUnexpectedEOF}
+	}
+	x := newExtractor(opts, 0, rootSink(dest))
+	x.wrapSink = true
+	return walkForward(br, kind, baseName, x.opts.streamLimits(0), backslashDirs(x.admitEntry))
 }
 
 func (x *extractor) run(src Source, size int64, baseName string) error {

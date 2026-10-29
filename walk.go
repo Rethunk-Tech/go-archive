@@ -50,26 +50,39 @@ var errWalkStop = errors.New("walk stopped")
 // what an archive holds; only their bounds and reads differ. The stream budget
 // has to be set where the decoder is built rather than on what comes out of it.
 func walk(src Source, size int64, baseName string, limits walkLimits, visit walkFunc) error {
-	// A writer that separates with backslashes ends a folder's name with one too,
-	// which the reader does not see as a folder.
-	fn := func(it item, open func() (io.ReadCloser, error)) error {
+	fn := backslashDirs(visit)
+	switch kind := detectSource(src, baseName); kind {
+	case fmtZip:
+		return walkZip(src, size, limits, fn)
+	case fmtSevenZip:
+		return walkSevenZip(src, size, limits, fn)
+	default:
+		return walkForward(io.NewSectionReader(src, 0, size), kind, baseName, limits, fn)
+	}
+}
+
+// walkForward walks the formats a forward-only reader can hold: RAR and the
+// streams. Zip and 7z need random access and are refused here.
+func walkForward(r io.Reader, kind int, baseName string, limits walkLimits, fn walkFunc) error {
+	switch kind {
+	case fmtRAR:
+		return walkRAR(r, limits, fn)
+	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2, fmtLz4:
+		return walkStream(r, kind, baseName, limits, fn)
+	}
+	return &Error{Reason: ErrUnsupportedFormat}
+}
+
+// backslashDirs marks an entry whose name ends in a backslash as a folder: a
+// writer that separates with backslashes ends a folder's name with one too,
+// which the reader does not see as a folder.
+func backslashDirs(visit walkFunc) walkFunc {
+	return func(it item, open func() (io.ReadCloser, error)) error {
 		if strings.HasSuffix(it.Name, `\`) {
 			it.IsDir = true
 		}
 		return visit(it, open)
 	}
-	kind := detectSource(src, baseName)
-	switch kind {
-	case fmtZip:
-		return walkZip(src, size, limits, fn)
-	case fmtRAR:
-		return walkRAR(io.NewSectionReader(src, 0, size), limits, fn)
-	case fmtSevenZip:
-		return walkSevenZip(src, size, limits, fn)
-	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2, fmtLz4:
-		return walkStream(io.NewSectionReader(src, 0, size), kind, baseName, limits, fn)
-	}
-	return &Error{Reason: ErrUnsupportedFormat}
 }
 
 // tooMany reports whether a container declaring n entries exceeds the cap.

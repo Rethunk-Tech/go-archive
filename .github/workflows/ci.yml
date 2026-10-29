@@ -77,6 +77,6 @@ jobs:
       - name: Fuzz smoke
         if: runner.os == 'Linux'
         run: |
-          for target in FuzzCleanName FuzzExtract FuzzExtractZipEntries FuzzExtractStreams; do
+          for target in FuzzCleanName FuzzExtract FuzzExtractZipEntries FuzzExtractStreams FuzzExtractReader; do
             go test -run=^$ -fuzz="^${target}\$" -fuzztime=20s .
           done

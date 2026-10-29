@@ -36,8 +36,14 @@ func detect(head []byte) int {
 func detectSource(src io.ReaderAt, baseName string) int {
 	var magic [headLen]byte
 	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
-	kind := detect(magic[:n])
-	if kind == fmtNone && emptyTar(magic[:n], baseName) {
+	return detectNamed(magic[:n], baseName)
+}
+
+// detectNamed is detect, plus an empty tar that only its name can tell from a
+// run of zeros.
+func detectNamed(head []byte, baseName string) int {
+	kind := detect(head)
+	if kind == fmtNone && emptyTar(head, baseName) {
 		return fmtTar
 	}
 	return kind

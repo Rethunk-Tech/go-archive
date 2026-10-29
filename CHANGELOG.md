@@ -12,6 +12,7 @@ Notable changes to `go-archive`. The format follows
 - `IsMediaType` reports whether a `Content-Type` names a format this package reads, including the types `gh release upload` and shared-mime-info give tarballs. `application/octet-stream` is not one.
 - `ExtractFunc` walks an archive under `Extract`'s admission rules and hands each entry to a callback instead of writing it, for in-memory or non-filesystem sinks. The bytes the callback reads count against the caps.
 - `Options.CaseSensitive` turns off the case-collision check for a sink that keeps names differing only by case apart; an exact duplicate is still refused.
+- `ExtractReader` extracts RAR and the stream formats from an `io.Reader` with no random access and no known size, such as an HTTP body. A body that ends before its format shows fails as `io.ErrUnexpectedEOF`.
 
 ### Changed
 
