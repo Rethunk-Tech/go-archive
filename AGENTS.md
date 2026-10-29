@@ -34,6 +34,10 @@ budget, capped by the ratio, stops a bomb the per-entry bound would allow
 spread thin, including one in an entry nothing writes. Neither
 bound is policy.
 
+The caps are this package's own `limitReader`, not go-safefs's `CapReader`: each
+bound fails with its own typed reason (`ErrEntryTooLarge`, the total, the ratio),
+which a single `ErrTooLarge` cannot carry, so the module takes no go-safefs import.
+
 ## Files
 
 | File | Holds |
