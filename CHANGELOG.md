@@ -10,6 +10,8 @@ Notable changes to `go-archive`. The format follows
 
 - `Extensions`, `HasExtension`, `StripExtension` and `IsStream` name the file endings of the formats read, for pickers, upload filters and naming the folder an archive unpacks into.
 - `IsMediaType` reports whether a `Content-Type` names a format this package reads, including the types `gh release upload` and shared-mime-info give tarballs. `application/octet-stream` is not one.
+- `ExtractFunc` walks an archive under `Extract`'s admission rules and hands each entry to a callback instead of writing it, for in-memory or non-filesystem sinks. The bytes the callback reads count against the caps.
+- `Options.CaseSensitive` turns off the case-collision check for a sink that keeps names differing only by case apart; an exact duplicate is still refused.
 
 ### Changed
 

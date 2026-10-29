@@ -44,6 +44,11 @@ type Options struct {
 	// Segment reports whether one path segment is a name the destination platform
 	// will store as written. nil means WindowsSegment.
 	Segment func(seg string) bool
+	// CaseSensitive turns off the case-collision check, for an ExtractFunc sink
+	// that keeps names differing only by case apart (a map, an object store). An
+	// exact duplicate file is still refused. Extract and ExtractReader write to a
+	// filesystem, where such names collide, so they leave it false.
+	CaseSensitive bool
 }
 
 // segment is the name policy cleanName applies, defaulting to WindowsSegment.
@@ -110,9 +115,27 @@ type Source interface {
 // default.
 func Extract(src Source, size int64, baseName string, dest *os.Root, opts Options) (err error) {
 	defer RecoverMalformed(&err)
+	x := newExtractor(opts, size, rootSink(dest))
+	x.wrapSink = true
+	return x.run(src, size, baseName)
+}
 
-	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
-	x.ratioMax = x.opts.ratioCap(size)
+// ExtractFunc walks src under Extract's admission rules and hands each admitted
+// entry to fn instead of writing it. name is the cleaned slash path; r reads
+// nothing for a directory. The bytes fn reads count against the caps, and a
+// file's checksum is verified only when fn reads it to the end. fn's own error
+// is returned as it is.
+//
+// No filesystem judges the tree, so a file "a" followed by "a/b" passes here
+// where Extract's mkdir would refuse it.
+func ExtractFunc(src Source, size int64, baseName string, opts Options,
+	fn func(name string, isDir bool, r io.Reader) error,
+) (err error) {
+	defer RecoverMalformed(&err)
+	return newExtractor(opts, size, fn).run(src, size, baseName)
+}
+
+func (x *extractor) run(src Source, size int64, baseName string) error {
 	limits := x.opts.streamLimits(size)
 	// The declared count is refused up front where a container can report it;
 	// admit counts the rest as they are written.

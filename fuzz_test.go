@@ -88,14 +88,33 @@ func extractFuzzed(t *testing.T, archive []byte) {
 	// Listing and sizing read the same untrusted headers; they must fail, not panic.
 	listFuzzed(t, src)
 	sizeFuzzed(t, src)
-	extractPath(t, src, dest)
+	err := extractPath(t, src, dest)
 	checkExtracted(t, parent, dest)
+	// ExtractFunc admits under the same rules, so whatever it refuses Extract
+	// refuses too; Extract may refuse more, since its filesystem judges the tree.
+	if funcErr := extractFuncPath(t, src); funcErr != nil && err == nil {
+		t.Fatalf("ExtractFunc refused what Extract wrote: %v", funcErr)
+	}
+}
+
+// fuzzOptions are small caps that keep a crafted bomb from filling the disk.
+var fuzzOptions = Options{MaxEntryBytes: 1 << 20, MaxTotalBytes: 4 << 20, MaxEntries: 200}
+
+// extractFuncPath drives ExtractFunc over src with a callback that drains every
+// file, as Extract's own writer does.
+func extractFuncPath(t *testing.T, src string) error {
+	t.Helper()
+	f, size := openSized(t, src)
+	return ExtractFunc(f, size, filepath.Base(src), fuzzOptions, func(_ string, _ bool, r io.Reader) error {
+		_, err := io.Copy(io.Discard, r)
+		return err
+	})
 }
 
 // extractPath extracts src into the existing dest under the fuzz caps. A refusal
 // is the expected outcome for crafted input, so only a panic or a write outside
 // dest is a finding, and checkExtracted is what proves the latter.
-func extractPath(t *testing.T, src, dest string) {
+func extractPath(t *testing.T, src, dest string) error {
 	t.Helper()
 	f, size := openSized(t, src)
 	root, err := os.OpenRoot(dest)
@@ -103,11 +122,7 @@ func extractPath(t *testing.T, src, dest string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	_ = Extract(f, size, filepath.Base(src), root, Options{
-		MaxEntryBytes: 1 << 20,
-		MaxTotalBytes: 4 << 20,
-		MaxEntries:    200,
-	})
+	return Extract(f, size, filepath.Base(src), root, fuzzOptions)
 }
 
 // listFuzzed drives a Lister to exhaustion, so a crafted header reaches the same
