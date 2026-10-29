@@ -72,11 +72,13 @@ jobs:
           go-version-file: go.mod
           run-test-race: "true"
 
-      # Linux only. Each target reaches a reader the others do not, and the Windows job
-      # already replays every seed.
+      # Each Fuzz target found in each package gets a short run, so a new target is covered without
+      # editing this file. Linux only: every other leg already replays the committed seeds as tests.
       - name: Fuzz smoke
         if: runner.os == 'Linux'
         run: |
-          for target in FuzzCleanName FuzzExtract FuzzExtractZipEntries FuzzExtractStreams FuzzExtractReader; do
-            go test -run=^$ -fuzz="^${target}\$" -fuzztime=20s .
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+              go test -run='^$' -fuzz="^${target}\$" -fuzztime=20s "$pkg"
+            done
           done
