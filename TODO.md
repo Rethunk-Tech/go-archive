@@ -6,8 +6,3 @@
 header walk refuses before a raised `MaxEntries` can apply. No fixture
 declares that many entries. When a caller raises the cap and needs
 `ErrTooManyEntries`, narrow the coupling and add the fixture together.
-
-## `TestDiskFullIsDistinguishable` does not fill a disk
-
-It checks that the error chain keeps `ENOSPC`. Forcing a real full filesystem
-is more fixture than that fact.
