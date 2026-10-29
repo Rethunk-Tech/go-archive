@@ -1,0 +1,4 @@
+{
+  "skip_paths": ["internal/rardecode/**"],
+  "_comment": "internal/rardecode is nwaples/rardecode vendored with one patch; its comments are upstream's and stay as upstream wrote them."
+}

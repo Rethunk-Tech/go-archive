@@ -1,7 +1,6 @@
 version: 2
 
-# Grouped so a week's updates arrive as one PR per ecosystem rather than one per module. The five
-# archive decoders release independently, and five separate PRs for one dependency sweep is noise.
+# Grouped so a week's updates arrive as one PR per ecosystem rather than one per module.
 updates:
   - package-ecosystem: gomod
     directory: /
