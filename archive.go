@@ -63,6 +63,17 @@ func (o Options) ratioCap(srcSize int64) int64 {
 	return min(o.MaxTotalBytes, max(o.RatioFloor, srcSize*o.MaxRatio))
 }
 
+// streamLimits bounds what a stream of srcSize bytes may decompress. The ratio
+// applies here as well as to what is written, because an entry that is skipped
+// rather than written is still decompressed to reach the next one.
+func (o Options) streamLimits(srcSize int64) walkLimits {
+	limit, over := o.ratioCap(srcSize), ErrArchiveTooLarge
+	if limit < o.MaxTotalBytes {
+		over = ErrRatio
+	}
+	return walkLimits{budget: streamBudget(limit, o.MaxEntries), over: over}
+}
+
 func (o Options) withDefaults() Options {
 	if o.MaxEntryBytes == 0 {
 		o.MaxEntryBytes = DefaultMaxEntryBytes
@@ -82,10 +93,11 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// Source is what a reader needs. *os.File and *bytes.Reader both satisfy it.
+// Source is what a reader needs. *os.File, *bytes.Reader and *io.SectionReader
+// satisfy it. Every read is at an offset, so the caller's file position is
+// never moved.
 type Source interface {
 	io.ReaderAt
-	io.Seeker
 }
 
 // Extract unpacks the archive src (size bytes) into dest, detecting the format
@@ -104,10 +116,9 @@ func extract(src Source, size int64, baseName string, dest *os.Root, opts Option
 
 	x := &extractor{root: dest, opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}}
 	x.ratioMax = x.opts.ratioCap(size)
-	return walk(src, size, baseName, walkLimits{
-		budget: streamBudget(x.opts.MaxTotalBytes, x.opts.MaxEntries),
-		// The declared count is refused up front where a container can report
-		// it; admit counts the rest as they are written.
-		maxEntries: x.opts.MaxEntries,
-	}, x.admitEntry)
+	limits := x.opts.streamLimits(size)
+	// The declared count is refused up front where a container can report it;
+	// admit counts the rest as they are written.
+	limits.maxEntries = x.opts.MaxEntries
+	return walk(src, size, baseName, limits, x.admitEntry)
 }

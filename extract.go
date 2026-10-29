@@ -4,6 +4,7 @@ import (
 	"hash/crc32"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,7 +87,8 @@ func (x *extractor) write(name, target string, src io.Reader, wantCRC *uint32) e
 	if err != nil {
 		return wrap(name, err)
 	}
-	limit := min(x.opts.MaxEntryBytes, x.opts.MaxTotalBytes-x.total, x.ratioMax-x.total)
+	// The ceiling below MaxInt64 keeps limit+1 from wrapping when every cap is MaxInt64.
+	limit := min(x.opts.MaxEntryBytes, x.opts.MaxTotalBytes-x.total, x.ratioMax-x.total, math.MaxInt64-1)
 	h := crc32.NewIEEE()
 	// One byte past the limit proves the entry is over it without trusting declared sizes.
 	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(src, limit+1))

@@ -198,9 +198,9 @@ func TestListerReportsAStreamsBareFile(t *testing.T) {
 
 // A bare stream's header declares no size, so the count is the bytes drained,
 // which is what Entries exists to report.
-func TestListerEntriesTotalsTheBytesDrained(t *testing.T) {
+func TestListerEntriesDrainsOnlyABareStream(t *testing.T) {
 	t.Parallel()
-	l := openListerPath(t, filepath.Join("testdata", "valid.tar.gz"), ListerOptions{})
+	l := openListerPath(t, filepath.Join("testdata", "bare.txt.gz"), ListerOptions{})
 	var total int64
 	for e, err := range l.Entries() {
 		if err != nil {
@@ -436,5 +436,42 @@ func TestListerSkipsAPaxGlobalHeader(t *testing.T) {
 		if e.Name == "" || strings.HasPrefix(e.Name, "pax") {
 			t.Fatalf("listed a header entry: %+v", e)
 		}
+	}
+}
+
+// A failed Next leaves no entry current, so Open cannot hand back the one before it.
+func TestListerOpenAfterAFailedNextRefuses(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "a.txt", Typeflag: tar.TypeReg, Size: 1, Mode: 0o644, Format: tar.FormatUSTAR}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	buf.Write(bytes.Repeat([]byte("x"), 512))
+	l := openListerPath(t, writeTemp(t, "broken.tar", buf.Bytes()), ListerOptions{})
+	if _, err := l.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Next(); err == nil {
+		t.Fatal("Next over a corrupt header succeeded")
+	}
+	if _, err := l.Open(); !errors.Is(err, errNoEntry) {
+		t.Fatalf("Open after a failed Next = %v, want errNoEntry", err)
+	}
+}
+
+// A skipped stream entry is decompressed too, so a listing keeps the ratio bound
+// rather than reading a small file's bomb up to the total cap.
+func TestListerKeepsTheRatioBound(t *testing.T) {
+	t.Parallel()
+	limits := Options{}.withDefaults().streamLimits(1 << 20)
+	if limits.budget > streamBudget(DefaultRatioFloor, DefaultMaxEntries) || !errors.Is(limits.over, ErrRatio) {
+		t.Fatalf("listing limits for a 1 MiB source = %+v", limits)
 	}
 }

@@ -23,7 +23,8 @@ exporting them is what a second package would cost.
 
 `Extract` refuses an over-declared zip or 7z entry count before writing.
 `maxDecoderBytes` is set where the decoder is built. A stream's aggregate
-budget stops a bomb the per-entry bound would allow spread thin. Neither
+budget, capped by the ratio, stops a bomb the per-entry bound would allow
+spread thin, including one in an entry nothing writes. Neither
 bound is policy.
 
 ## Files

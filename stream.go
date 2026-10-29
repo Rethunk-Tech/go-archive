@@ -109,11 +109,6 @@ func (c *limitReader) Close() error {
 	return nil
 }
 
-// capReader bounds a whole stream's decompressed output.
-func capReader(r io.Reader, budget int64) *limitReader {
-	return &limitReader{r: r, left: budget, reason: ErrArchiveTooLarge}
-}
-
 // payload is the decompressed bytes of a stream format, positioned at the start,
 // and whether they are a tar.
 type payload struct {
@@ -123,10 +118,10 @@ type payload struct {
 }
 
 // openPayload decompresses r (already at the file's start) as kind, allowing
-// budget bytes of decompressed output. The cap goes on the decoder here rather
-// than on what comes out of it, so a stream bomb stops at the bound instead of
-// decompressing unbounded and being rejected afterwards.
-func openPayload(r io.Reader, kind int, budget int64) (*payload, error) {
+// limits.budget bytes of decompressed output. The cap goes on the decoder here
+// rather than on what comes out of it, so a stream bomb stops at the bound
+// instead of decompressing unbounded and being rejected afterwards.
+func openPayload(r io.Reader, kind int, limits walkLimits) (*payload, error) {
 	closeFn := func() {}
 	var plain io.Reader
 	switch kind {
@@ -162,7 +157,7 @@ func openPayload(r io.Reader, kind int, budget int64) (*payload, error) {
 	case fmtBzip2:
 		plain = bzip2.NewReader(r)
 	}
-	br := bufio.NewReaderSize(capReader(plain, budget), 4096)
+	br := bufio.NewReaderSize(&limitReader{r: plain, left: limits.budget, reason: limits.over}, 4096)
 	head, err := br.Peek(512)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) && len(head) == 0 {
 		closeFn()
@@ -184,25 +179,18 @@ func singleName(baseName string) string {
 	return name
 }
 
-// streamOptions are the caps for reading a stream of srcSize bytes without extracting it.
-func streamOptions(srcSize int64) Options {
-	o := Options{MaxEntries: DefaultMaxEntries}.withDefaults()
-	o.MaxTotalBytes = o.ratioCap(srcSize)
-	return o
-}
-
 // streamSize is the bytes a stream format unpacks to, counted by reading it
-// within the caps; a stream over them reports the cap.
+// within the default caps; a stream over them reports the cap.
 func streamSize(r io.Reader, kind int, srcSize int64) (int64, error) {
-	opts := streamOptions(srcSize)
-	p, err := openPayload(r, kind, streamBudget(opts.MaxTotalBytes, opts.MaxEntries))
+	opts := Options{}.withDefaults()
+	p, err := openPayload(r, kind, opts.streamLimits(srcSize))
 	if err != nil {
 		return 0, err
 	}
 	defer p.close()
 	n, err := io.Copy(io.Discard, p.r)
 	if _, typed := errors.AsType[*Error](err); typed {
-		return opts.MaxTotalBytes, nil
+		return opts.ratioCap(srcSize), nil
 	}
 	return n, err
 }

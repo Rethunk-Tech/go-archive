@@ -21,15 +21,6 @@ type ListerOptions struct {
 	MaxEntryBytes int64
 }
 
-// budget is what the decoder may produce for the whole listing. A stream cannot
-// be enumerated without decompressing it, so the aggregate needs a ceiling even
-// though the per-entry bound is what a caller sets. It is Extract's total cap, so
-// one rule serves both entry points: a single bomb fails on the per-entry bound
-// in Open, and an archive of many legitimate entries is not refused for size.
-func (o ListerOptions) budget() int64 {
-	return streamBudget(DefaultMaxTotalBytes, DefaultMaxEntries)
-}
-
 // Lister walks an archive's entries once, forward.
 //
 // Next reports each entry in order and returns io.EOF at the end. Open gives the
@@ -89,8 +80,11 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 				yield(walkStep{}, err)
 			}
 		}()
-		// A listing has no entry cap: counting is the caller's policy.
-		limits := walkLimits{budget: l.opts.budget()}
+		// A stream cannot be enumerated without decompressing it, so the listing
+		// keeps Extract's default stream bound, ratio included. It has no entry
+		// cap: counting is the caller's policy.
+		limits := Options{}.withDefaults().streamLimits(l.size)
+		limits.maxEntries = 0
 		err = walk(l.src, l.size, l.baseName, limits, func(it item, open func() (io.ReadCloser, error)) error {
 			if !yield(walkStep{item: it, open: open}, nil) {
 				return errWalkStop
@@ -112,6 +106,7 @@ func (l *Lister) Next() (Entry, error) {
 	_ = l.closeCurrent()
 	step, err, ok := l.steps()
 	if err != nil {
+		l.step = walkStep{}
 		return Entry{}, err
 	}
 	if !ok {
@@ -125,8 +120,10 @@ func (l *Lister) Next() (Entry, error) {
 }
 
 // Open returns the current entry's bytes, valid until the next Next. A
-// directory holds no bytes, so it reads empty rather than failing.
-func (l *Lister) Open() (io.ReadCloser, error) {
+// directory holds no bytes, so it reads empty rather than failing. A format
+// reader that panics on crafted bytes here or in Read fails with ErrMalformed.
+func (l *Lister) Open() (_ io.ReadCloser, err error) {
+	defer RecoverMalformed(&err)
 	if l.closed || l.step.open == nil || l.opened {
 		return nil, &Error{Entry: l.step.item.Name, Reason: errNoEntry}
 	}
@@ -176,9 +173,9 @@ func (l *Lister) closeCurrent() error {
 	return rc.Close()
 }
 
-// Entries adapts the same walk to range-over-func, draining each entry so the
-// sizes it reports are the bytes actually there. Next without Open cannot do
-// that, which is why this form exists.
+// Entries adapts the same walk to range-over-func. A size comes from the
+// entry's header, like DeclaredSize's; a bare stream declares none, so its one
+// entry is drained to learn it, which Next without Open would leave at -1.
 func (l *Lister) Entries() iter.Seq2[Entry, error] {
 	return func(yield func(Entry, error) bool) {
 		for {
@@ -190,7 +187,7 @@ func (l *Lister) Entries() iter.Seq2[Entry, error] {
 				yield(Entry{}, err)
 				return
 			}
-			if !e.IsDir {
+			if e.Size < 0 {
 				n, err := l.drain()
 				if err != nil {
 					yield(Entry{}, err)
@@ -211,11 +208,7 @@ func (l *Lister) drain() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := io.Copy(io.Discard, rc)
-	if err != nil {
-		return n, err
-	}
-	return n, nil
+	return io.Copy(io.Discard, rc)
 }
 
 // normalise is an entry's name with backslashes as separators and no trailing
@@ -235,7 +228,8 @@ type listReader struct {
 	name   string
 }
 
-func (r *listReader) Read(p []byte) (int, error) {
+func (r *listReader) Read(p []byte) (_ int, err error) {
+	defer RecoverMalformed(&err)
 	if r.lister.gen != r.gen {
 		return 0, &Error{Entry: r.name, Reason: errNoEntry}
 	}

@@ -63,12 +63,12 @@ for {
 | `Extract` on failure | stops at the first error and leaves the partial tree, so pass a throwaway directory and discard it |
 | `baseName` | names the file a bare stream yields; a `~~` prefix is dropped and one trailing stream suffix (`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`) removed, case-insensitively; formats carrying their own names ignore it |
 | `Lister` refuses | nothing; entry counts and name acceptability are the caller's |
-| `Lister`'s one bound | `ListerOptions.MaxEntryBytes`, because a stream cannot be listed without decompressing it |
+| `Lister`'s bounds | `ListerOptions.MaxEntryBytes` on what `Open` hands out, and `Extract`'s default stream budget with its ratio, because a stream cannot be listed without decompressing it |
 | The walk | forward-only, because the formats are; `Open` is valid only until the next `Next` |
-| `Close` | idempotent, and never closes the `Source` you passed in |
+| `Close` | idempotent, and never closes the `Source` you passed in; every read is at an offset, so its position never moves |
 | `Entry.Name` | normalised: `\` becomes `/`, a trailing `/` is dropped |
 | A skipped entry | reports the size its header declared, which an archive can set to anything; a bare stream reports `-1` |
-| `Entries()` | drains each entry, so the count it reports is the bytes actually there |
+| `Entries()` | reports each header's size and drains only a bare stream, whose `-1` becomes the bytes actually there |
 
 ## Caps
 

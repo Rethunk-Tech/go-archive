@@ -242,7 +242,7 @@ func FuzzExtractStreams(f *testing.F) {
 
 // FuzzList asserts the Lister's own contract, which FuzzExtract cannot reach: every
 // name arrives normalised, the walk ends in io.EOF, and the two iteration forms
-// agree on both the entry count and the byte total.
+// agree on both the entry count and the size total.
 func FuzzList(f *testing.F) {
 	seeds, _ := filepath.Glob("testdata/*")
 	for _, p := range seeds {
@@ -271,8 +271,8 @@ func FuzzList(f *testing.F) {
 	})
 }
 
-// listByNext drains every entry through Next and Open, which is the form that
-// reports a listing's byte counts.
+// listByNext walks through Next and Open the way Entries does: header sizes, and
+// a drain only for the bare stream that declares none.
 func listByNext(t *testing.T, src string) (int64, int, error) {
 	t.Helper()
 	l, err := openLister(t, src)
@@ -294,7 +294,8 @@ func listByNext(t *testing.T, src string) (int64, int, error) {
 			t.Fatalf("Next reported %q", e.Name)
 		}
 		count++
-		if e.IsDir {
+		if e.Size >= 0 {
+			total += e.Size
 			continue
 		}
 		rc, err := l.Open()
@@ -310,7 +311,7 @@ func listByNext(t *testing.T, src string) (int64, int, error) {
 	}
 }
 
-// listByEntries drains the same archive through range-over-func.
+// listByEntries walks the same archive through range-over-func.
 func listByEntries(t *testing.T, src string) (int64, int, error) {
 	t.Helper()
 	l, err := openLister(t, src)

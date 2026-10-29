@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
@@ -761,4 +762,51 @@ func declaredSize(t *testing.T, path string) (int64, error) {
 		return 0, err
 	}
 	return DeclaredSize(f, info.Size())
+}
+
+// tarGzOfZeros is a gzipped tar holding one regular entry of size zero bytes.
+func tarGzOfZeros(t *testing.T, name string, size int64) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: size, Mode: 0o644}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(make([]byte, size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return writeTemp(t, "zeros.tar.gz", buf.Bytes())
+}
+
+// An entry named "." writes nothing, yet the tar reader still decompresses it to
+// reach the next header, so the ratio has to bound the stream itself.
+func TestRatioGuardStopsASkippedStreamEntry(t *testing.T) {
+	t.Parallel()
+	src := tarGzOfZeros(t, ".", 4<<20)
+	_, err := extractDir(t, src, Options{MaxEntries: 1, MaxRatio: 1, RatioFloor: 1 << 20})
+	wantReason(t, err, ErrRatio, "")
+}
+
+// Caps set to the largest int64 mean unlimited, not an empty file.
+func TestMaxInt64CapsStillWriteTheEntry(t *testing.T) {
+	t.Parallel()
+	src := buildZip(t, zentry{name: "a.txt", body: "hello"})
+	maxCap := int64(1<<63 - 1)
+	dest, err := extractDir(t, src, Options{MaxEntryBytes: maxCap, MaxTotalBytes: maxCap, RatioFloor: maxCap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(dest, "a.txt")); got != "hello" {
+		t.Fatalf("a.txt = %q", got)
+	}
 }

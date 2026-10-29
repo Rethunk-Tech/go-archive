@@ -14,11 +14,8 @@ import (
 func DeclaredSize(src Source, size int64) (_ int64, err error) {
 	defer RecoverMalformed(&err)
 
-	var magic [headLen]byte
-	n, _ := io.ReadFull(io.NewSectionReader(src, 0, headLen), magic[:])
-
 	var total int64
-	switch detect(magic[:n]) {
+	switch kind := detectSource(src); kind {
 	case fmtZip:
 		zr, err := zip.NewReader(src, size)
 		if err != nil && (zr == nil || !errors.Is(err, zip.ErrInsecurePath)) {
@@ -36,14 +33,10 @@ func DeclaredSize(src Source, size int64) (_ int64, err error) {
 			total += int64(min(e.UncompressedSize, math.MaxInt64))
 		}
 	case fmtRAR:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return 0, err
-		}
 		// The reader allocates the window on Next() and compares it against a 4 GiB
 		// default, so a crafted header forces the allocation before a byte is read
 		// and no reader cap sits below it to prevent that.
-		rr, err := rardecode.NewReader(io.NewSectionReader(src, start, size-start), rardecode.MaxDictionarySize(maxDecoderBytes))
+		rr, err := rardecode.NewReader(io.NewSectionReader(src, 0, size), rardecode.MaxDictionarySize(maxDecoderBytes))
 		if err != nil {
 			return 0, wrap("", err)
 		}
@@ -58,11 +51,7 @@ func DeclaredSize(src Source, size int64) (_ int64, err error) {
 			total += h.UnPackedSize
 		}
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return 0, err
-		}
-		return streamSize(io.NewSectionReader(src, start, size-start), detect(magic[:n]), size)
+		return streamSize(io.NewSectionReader(src, 0, size), kind, size)
 	default:
 		return 0, &Error{Reason: ErrUnsupportedFormat}
 	}

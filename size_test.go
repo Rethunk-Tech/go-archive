@@ -78,22 +78,17 @@ func TestDeclaredSizeReportsTheCapForAnOverCapStream(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// streamSize derives its caps from the source size, and the ratio floor keeps
-	// a small source's cap above its payload, so the cap is exercised directly at
-	// the budget the extractor would use.
-	opts := streamOptions(int64(buf.Len()))
-	p, err := openPayload(bytes.NewReader(buf.Bytes()), fmtGzip, 1<<20)
+	// A small source's ratio cap is the 2 GiB floor, far above this payload, so
+	// lowered caps exercise the bound the extractor would apply.
+	limits := Options{MaxEntries: 1, MaxRatio: 1, RatioFloor: 1 << 20}.withDefaults().streamLimits(int64(buf.Len()))
+	p, err := openPayload(bytes.NewReader(buf.Bytes()), fmtGzip, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.close()
 	n, err := io.Copy(io.Discard, p.r)
-	if !errors.Is(err, ErrArchiveTooLarge) {
-		t.Fatalf("drained %d bytes, %v; want ErrArchiveTooLarge at the 1 MiB budget", n, err)
-	}
-	// The reported figure for such a stream is the cap the caller set.
-	if opts.MaxTotalBytes <= 0 {
-		t.Fatalf("stream cap = %d", opts.MaxTotalBytes)
+	if !errors.Is(err, ErrRatio) {
+		t.Fatalf("drained %d bytes, %v; want ErrRatio at the ratio-bound budget", n, err)
 	}
 }
 

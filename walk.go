@@ -29,12 +29,13 @@ type item struct {
 // skip those bytes.
 type walkFunc func(it item, open func() (io.ReadCloser, error)) error
 
-// walkLimits are the two bounds the walk itself enforces. budget is what a
-// stream may decompress; maxEntries, when non-zero, refuses a container that
-// declares more entries than that before any is read, which zip and 7z can do
-// and the streaming formats cannot.
+// walkLimits are the bounds the walk itself enforces. budget is what a stream
+// may decompress, and over is the reason it fails with past that; maxEntries,
+// when non-zero, refuses a container that declares more entries than that
+// before any is read, which zip and 7z can do and the streaming formats cannot.
 type walkLimits struct {
 	budget     int64
+	over       error
 	maxEntries int
 }
 
@@ -52,19 +53,11 @@ func walk(src Source, size int64, baseName string, limits walkLimits, fn walkFun
 	case fmtZip:
 		return walkZip(src, size, limits, fn)
 	case fmtRAR:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		return walkRAR(io.NewSectionReader(src, start, size-start), fn)
+		return walkRAR(io.NewSectionReader(src, 0, size), fn)
 	case fmtSevenZip:
 		return walkSevenZip(src, size, limits, fn)
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
-		start, err := src.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		return walkStream(io.NewSectionReader(src, start, size-start), kind, baseName, limits.budget, fn)
+		return walkStream(io.NewSectionReader(src, 0, size), kind, baseName, limits, fn)
 	}
 	return &Error{Reason: ErrUnsupportedFormat}
 }
@@ -151,8 +144,8 @@ func walkRAR(src io.Reader, fn walkFunc) error {
 	}
 }
 
-func walkStream(src io.Reader, kind int, baseName string, budget int64, fn walkFunc) error {
-	p, err := openPayload(src, kind, budget)
+func walkStream(src io.Reader, kind int, baseName string, limits walkLimits, fn walkFunc) error {
+	p, err := openPayload(src, kind, limits)
 	if err != nil {
 		return err
 	}
