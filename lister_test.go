@@ -450,3 +450,56 @@ func TestListerKeepsTheRatioBound(t *testing.T) {
 		t.Fatalf("listing limits for a 1 MiB source = %+v", limits)
 	}
 }
+
+// A name ending in a backslash is a folder for the Lister as it is for Extract.
+func TestListerReportsABackslashFolderAsADirectory(t *testing.T) {
+	t.Parallel()
+	got := names(t, openZipLister(t, zentry{name: `Mod\sub\`}, zentry{name: `Mod\sub\a.txt`, body: "a"}))
+	if len(got) != 2 || got[0].Name != "Mod/sub" || !got[0].IsDir {
+		t.Fatalf("listed %+v", got)
+	}
+}
+
+func TestListerOpenOnAFolderReadsEmpty(t *testing.T) {
+	t.Parallel()
+	l := openZipLister(t, zentry{name: "dir/"})
+	if _, err := l.Next(); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := l.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := io.ReadAll(rc); err != nil || len(b) != 0 {
+		t.Fatalf("read %q, %v", b, err)
+	}
+}
+
+func TestListerEntriesStopsWhenTheLoopBreaks(t *testing.T) {
+	t.Parallel()
+	l := openZipLister(t, zentry{name: "a.txt", body: "a"}, zentry{name: "b.txt", body: "b"})
+	seen := 0
+	for _, err := range l.Entries() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		break
+	}
+	if e, err := l.Next(); err != nil || e.Name != "b.txt" {
+		t.Fatalf("after breaking at %d entries, Next = %+v, %v", seen, e, err)
+	}
+}
+
+// Entries drains a bare stream, so the per-entry bound applies to it.
+func TestListerEntriesBoundsABareStream(t *testing.T) {
+	t.Parallel()
+	l := openListerPath(t, gzipOfZeros(t, "bomb.gz", 2<<20), ListerOptions{MaxEntryBytes: 1 << 20})
+	for _, err := range l.Entries() {
+		if !errors.Is(err, ErrEntryTooLarge) {
+			t.Fatalf("got %v, want ErrEntryTooLarge", err)
+		}
+		return
+	}
+	t.Fatal("Entries yielded nothing")
+}

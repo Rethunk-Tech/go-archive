@@ -62,12 +62,12 @@ for {
 | `Extract` refuses | path traversal, disallowed names, case collisions, symlinks and hardlinks, device/pipe/socket entries, encrypted archives, and archives over the entry, entry-size, total-size or ratio caps |
 | `Extract` on failure | stops at the first error and leaves the partial tree, so pass a throwaway directory and discard it |
 | `baseName` | names the file a bare stream yields; a `~~` prefix is dropped and one trailing stream suffix (`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`) removed, case-insensitively; formats carrying their own names ignore it |
-| `Lister` refuses | nothing; entry counts and name acceptability are the caller's |
-| `Lister`'s bounds | `ListerOptions.MaxEntryBytes` on what `Open` hands out, and `Extract`'s default stream budget with its ratio, because a stream cannot be listed without decompressing it |
+| `Lister` refuses | only what no reader can open safely: a 7z whose headers name more than `DefaultMaxEntries` entries or a decoder over 256 MiB; entry counts and name acceptability are otherwise the caller's |
+| `Lister`'s bounds | `ListerOptions.MaxEntryBytes` on what `Open` hands out, and `Extract`'s default stream budget with its ratio, because a stream, and a solid 7z or RAR reaching a later entry, decompresses what the caller skips |
 | The walk | forward-only, because the formats are; `Open` is valid only until the next `Next` |
 | `Close` | idempotent, and never closes the `Source` you passed in; every read is at an offset, so its position never moves |
 | `Entry.Name` | normalised: `\` becomes `/`, a trailing `/` is dropped |
-| A skipped entry | reports the size its header declared, which an archive can set to anything; a bare stream reports `-1` |
+| A skipped entry | reports the size its header declared, which an archive can set to anything; a RAR entry of unknown size reports 0 and a bare stream `-1` |
 | `Entries()` | reports each header's size and drains only a bare stream, whose `-1` becomes the bytes actually there |
 
 ## Caps

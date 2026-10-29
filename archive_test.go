@@ -771,6 +771,56 @@ func TestMaxInt64CapsStillWriteTheEntry(t *testing.T) {
 	}
 }
 
+// The stream budget adds tar overhead to the payload cap, which must not wrap.
+func TestMaxInt64CapsStillReadAStream(t *testing.T) {
+	t.Parallel()
+	maxCap := int64(1<<63 - 1)
+	_, err := extractDir(t, filepath.Join("testdata", "bare.txt.gz"),
+		Options{MaxEntryBytes: maxCap, MaxTotalBytes: maxCap, MaxRatio: maxCap, RatioFloor: maxCap})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDevicesInATarAreRefused(t *testing.T) {
+	t.Parallel()
+	for _, flag := range []byte{tar.TypeChar, tar.TypeBlock} {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		if err := tw.WriteHeader(&tar.Header{Name: "dev", Typeflag: flag, Format: tar.FormatUSTAR}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, err := extractDir(t, writeTemp(t, "dev.tar", buf.Bytes()), Options{})
+		wantReason(t, err, ErrSpecialFile, "dev")
+	}
+}
+
+// A truncated archive fails as an *Error whatever the library reported.
+func TestTruncatedArchivesFailTyped(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"valid.7z", "valid.tar.gz", "real.rar"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = extractDir(t, writeTemp(t, name, b[:len(b)/2]), Options{})
+		if _, typed := errors.AsType[*Error](err); !typed {
+			t.Errorf("%s: got %v, want *Error", name, err)
+		}
+	}
+	zipped, err := os.ReadFile(buildZip(t, zentry{name: "a.txt", body: "a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = extractDir(t, writeTemp(t, "cut.zip", zipped[:len(zipped)-10]), Options{})
+	if _, typed := errors.AsType[*Error](err); !typed {
+		t.Errorf("zip: got %v, want *Error", err)
+	}
+}
+
 // gzipOfZeros writes n zero bytes gzipped under name, a bomb at any ratio a test sets.
 func gzipOfZeros(t *testing.T, name string, n int) string {
 	t.Helper()

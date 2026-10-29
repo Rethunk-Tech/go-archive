@@ -30,7 +30,7 @@ const tarOverhead = 1536
 // headers are not payload, so charging them to the allowance would stop a
 // legitimate archive short of it.
 func streamBudget(payload int64, entries int) int64 {
-	return payload + int64(entries)*tarOverhead + 1<<20
+	return saturatingAdd(payload, int64(entries)*tarOverhead+1<<20)
 }
 
 // looksLikeLZMA recognises the classic .lzma header, which has no magic: valid

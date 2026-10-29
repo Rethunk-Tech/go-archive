@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+
+	"github.com/ulikunitz/xz/lzma"
 )
 
 var (
-	errSevenZipHeader        = errors.New("invalid 7z header")
+	errSevenZipHeader        = fmt.Errorf("%w: invalid 7z header", ErrMalformed)
 	errSevenZipDecoderMemory = errors.New("7z decoder memory exceeds the extraction cap")
 )
 
@@ -17,6 +20,9 @@ const (
 	sevenZipMaxCoders   = 64
 	sevenZipMaxStreams  = 64
 	sevenZipMaxProperty = 16 << 20
+	// sevenZipMaxHeader bounds a compressed header once decoded; one that lists
+	// DefaultMaxEntries files is a few megabytes.
+	sevenZipMaxHeader = 64 << 20
 )
 
 func checkSevenZipLimits(r io.ReaderAt, size int64) error {
@@ -41,11 +47,12 @@ func checkSevenZipLimits(r io.ReaderAt, size int64) error {
 	if err != nil {
 		return err
 	}
-
-	c := sevenZipCursor{r: io.NewSectionReader(r, 32+offset, length)}
+	c := sevenZipCursor{r: io.NewSectionReader(r, 32+offset, length), src: r, size: size}
 	return parseSevenZipHeader(&c)
 }
 
+// sevenZipInt64 converts a header value already checked against the archive's
+// size, so the conversion is proven safe where it happens.
 func sevenZipInt64(n uint64) (int64, error) {
 	if n > ^uint64(0)>>1 {
 		return 0, errSevenZipHeader
@@ -55,6 +62,12 @@ func sevenZipInt64(n uint64) (int64, error) {
 
 type sevenZipCursor struct {
 	r io.Reader
+	// src and size are the whole archive, for the packed stream an encoded
+	// header points at.
+	src  io.ReaderAt
+	size int64
+	// enc records the StreamsInfo of an encoded header while it is parsed.
+	enc *sevenZipEncoded
 }
 
 func (c *sevenZipCursor) byte() (byte, error) {
@@ -78,14 +91,15 @@ func (c *sevenZipCursor) uint() (uint64, error) {
 	}
 	var value uint64
 	if extra < 8 {
-		value = uint64(first & (mask - 1))
+		// The first byte's remaining bits are the high part, above the extra bytes.
+		value = uint64(first&(mask-1)) << (8 * extra)
 	}
-	for i := 0; i < extra; i++ {
+	for i := range extra {
 		b, err := c.byte()
 		if err != nil {
 			return 0, err
 		}
-		value = value<<8 | uint64(b)
+		value |= uint64(b) << (8 * i)
 	}
 	return value, nil
 }
@@ -107,7 +121,7 @@ func parseSevenZipHeader(c *sevenZipCursor) error {
 	}
 	switch id {
 	case 0x17:
-		return parseSevenZipStreamsInfo(c)
+		return parseSevenZipEncodedHeader(c)
 	case 0x01:
 		return parseSevenZipMainHeader(c)
 	default:
@@ -187,12 +201,7 @@ func parseSevenZipStreamsInfo(c *sevenZipCursor) error {
 			if err != nil {
 				return err
 			}
-			if err := parseSevenZipStreamTail(c, folders); err != nil {
-				return err
-			}
-			return nil
-		case 0x08:
-			return errSevenZipHeader
+			return parseSevenZipStreamTail(c, folders)
 		default:
 			return errSevenZipHeader
 		}
@@ -200,8 +209,12 @@ func parseSevenZipStreamsInfo(c *sevenZipCursor) error {
 }
 
 func parseSevenZipPackInfo(c *sevenZipCursor) error {
-	if _, err := c.uint(); err != nil {
+	packPos, err := c.uint()
+	if err != nil {
 		return err
+	}
+	if c.enc != nil {
+		c.enc.packPos = packPos
 	}
 	n, err := c.uint()
 	if err != nil || n > sevenZipMaxFolders {
@@ -217,8 +230,12 @@ func parseSevenZipPackInfo(c *sevenZipCursor) error {
 			return nil
 		case 0x09:
 			for range n {
-				if _, err := c.uint(); err != nil {
+				size, err := c.uint()
+				if err != nil {
 					return err
+				}
+				if c.enc != nil {
+					c.enc.packSizes = append(c.enc.packSizes, size)
 				}
 			}
 		case 0x0A:
@@ -268,8 +285,12 @@ func parseSevenZipUnpackInfo(c *sevenZipCursor) ([]sevenZipFolder, error) {
 		case 0x0C:
 			for _, folder := range folders {
 				for i := uint64(0); i < folder.outStreams; i++ {
-					if _, err := c.uint(); err != nil {
+					size, err := c.uint()
+					if err != nil {
 						return nil, err
+					}
+					if c.enc != nil {
+						c.enc.unpackSizes = append(c.enc.unpackSizes, size)
 					}
 				}
 			}
@@ -295,7 +316,7 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 			return sevenZipFolder{}, err
 		}
 		idSize := int(main & 0x0F)
-		if idSize == 0 || idSize > 16 {
+		if idSize == 0 {
 			return sevenZipFolder{}, errSevenZipHeader
 		}
 		var method [16]byte
@@ -318,6 +339,9 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 		}
 		folder.inStreams += inStreams
 		folder.outStreams += outStreams
+		if c.enc != nil {
+			c.enc.coders = append(c.enc.coders, sevenZipCoder{method: bytes.Clone(method[:idSize])})
+		}
 		if main&0x20 == 0 {
 			continue
 		}
@@ -332,6 +356,9 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 			}
 			if err := checkSevenZipCoder(method[:idSize], propsSize, props); err != nil {
 				return sevenZipFolder{}, err
+			}
+			if c.enc != nil {
+				c.enc.coders[len(c.enc.coders)-1].props = props
 			}
 		} else {
 			if err := c.skip(propsSize); err != nil {
@@ -403,7 +430,14 @@ func parseSevenZipStreamTail(c *sevenZipCursor, folders []sevenZipFolder) error 
 		case 0:
 			return nil
 		case 0x08:
-			return skipSevenZipSubStreams(c, folders)
+			if err := skipSevenZipSubStreams(c, folders); err != nil {
+				return err
+			}
+			// SubStreamsInfo ends with its own zero; StreamsInfo's follows it.
+			if id, err := c.byte(); err != nil || id != 0 {
+				return errSevenZipHeader
+			}
+			return nil
 		default:
 			return errSevenZipHeader
 		}
@@ -489,4 +523,98 @@ func parseSevenZipCRCs(c *sevenZipCursor, n uint64) error {
 		}
 	}
 	return nil
+}
+
+// sevenZipCoder is one coder of an encoded header's folder.
+type sevenZipCoder struct {
+	method []byte
+	props  []byte
+}
+
+// sevenZipEncoded is the StreamsInfo that says how a compressed header is packed.
+type sevenZipEncoded struct {
+	packPos     uint64
+	packSizes   []uint64
+	coders      []sevenZipCoder
+	unpackSizes []uint64
+}
+
+var sevenZipAES = []byte{0x06, 0xF1, 0x07, 0x01}
+
+// parseSevenZipEncodedHeader checks the streams a compressed header is packed
+// in, then decodes the header and checks it too. 7-Zip compresses the header by
+// default, so its folders and files are only visible once decoded.
+func parseSevenZipEncodedHeader(c *sevenZipCursor) error {
+	enc := &sevenZipEncoded{}
+	c.enc = enc
+	err := parseSevenZipStreamsInfo(c)
+	c.enc = nil
+	if err != nil {
+		return err
+	}
+	for _, coder := range enc.coders {
+		// An encrypted header cannot be read without the password; the reader
+		// refuses it as encrypted.
+		if bytes.Equal(coder.method, sevenZipAES) {
+			return nil
+		}
+	}
+	header, err := enc.decode(c.src, c.size)
+	if err != nil {
+		return err
+	}
+	hc := sevenZipCursor{r: bytes.NewReader(header)}
+	if id, err := hc.byte(); err != nil || id != 0x01 {
+		return errSevenZipHeader
+	}
+	return parseSevenZipMainHeader(&hc)
+}
+
+// decode unpacks the header with the one coder 7-Zip writes for it, whose
+// dictionary the walk has already bounded.
+func (e *sevenZipEncoded) decode(src io.ReaderAt, size int64) ([]byte, error) {
+	if size < 32 || len(e.coders) != 1 || len(e.packSizes) != 1 || len(e.unpackSizes) != 1 {
+		return nil, errSevenZipHeader
+	}
+	packSize, unpackSize := e.packSizes[0], e.unpackSizes[0]
+	if e.packPos > uint64(size-32) || packSize > uint64(size-32)-e.packPos || unpackSize > sevenZipMaxHeader {
+		return nil, errSevenZipHeader
+	}
+	pos, err := sevenZipInt64(e.packPos)
+	if err != nil {
+		return nil, err
+	}
+	n, err := sevenZipInt64(packSize)
+	if err != nil {
+		return nil, err
+	}
+	packed := io.NewSectionReader(src, 32+pos, n)
+	coder := e.coders[0]
+	var plain io.Reader
+	switch {
+	case bytes.Equal(coder.method, []byte{0x00}):
+		plain = packed
+	case bytes.Equal(coder.method, []byte{0x03, 0x01, 0x01}) && len(coder.props) == 5:
+		// The classic .lzma header is the 7z properties followed by the size.
+		head := binary.LittleEndian.AppendUint64(bytes.Clone(coder.props), unpackSize)
+		lr, err := lzma.NewReader(io.MultiReader(bytes.NewReader(head), packed))
+		if err != nil {
+			return nil, errSevenZipHeader
+		}
+		plain = lr
+	case bytes.Equal(coder.method, []byte{0x21}) && len(coder.props) == 1:
+		p := coder.props[0]
+		lr, err := lzma.Reader2Config{DictCap: int(2|p&1) << (int(p)/2 + 11)}.NewReader2(packed)
+		if err != nil {
+			return nil, errSevenZipHeader
+		}
+		plain = lr
+	default:
+		return nil, errSevenZipHeader
+	}
+	header, err := io.ReadAll(io.LimitReader(plain, int64(unpackSize)+1))
+	if err != nil || uint64(len(header)) != unpackSize {
+		return nil, errSevenZipHeader
+	}
+	return header, nil
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"strings"
 
 	"github.com/nwaples/rardecode/v2"
 )
@@ -44,13 +45,21 @@ var errWalkStop = errors.New("walk stopped")
 // Extract and Lister both enumerate through it and so cannot disagree about
 // what an archive holds; only their bounds and reads differ. The stream budget
 // has to be set where the decoder is built rather than on what comes out of it.
-func walk(src Source, size int64, baseName string, limits walkLimits, fn walkFunc) error {
+func walk(src Source, size int64, baseName string, limits walkLimits, visit walkFunc) error {
+	// A writer that separates with backslashes ends a folder's name with one too,
+	// which the reader does not see as a folder.
+	fn := func(it item, open func() (io.ReadCloser, error)) error {
+		if strings.HasSuffix(it.Name, `\`) {
+			it.IsDir = true
+		}
+		return visit(it, open)
+	}
 	kind := detectSource(src)
 	switch kind {
 	case fmtZip:
 		return walkZip(src, size, limits, fn)
 	case fmtRAR:
-		return walkRAR(io.NewSectionReader(src, 0, size), fn)
+		return walkRAR(io.NewSectionReader(src, 0, size), limits, fn)
 	case fmtSevenZip:
 		return walkSevenZip(src, size, limits, fn)
 	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
@@ -62,6 +71,31 @@ func walk(src Source, size int64, baseName string, limits walkLimits, fn walkFun
 // tooMany reports whether a container declaring n entries exceeds the cap.
 func (w walkLimits) tooMany(n int) bool {
 	return w.maxEntries > 0 && n > w.maxEntries
+}
+
+// solidCharge counts the bytes a solid 7z or RAR reader decompresses to reach an
+// entry: the declared sizes of every entry before it, which it decodes and
+// discards whether or not they were read. Charging them to the stream budget
+// bounds skipped entries the way the budget bounds a stream's.
+type solidCharge struct {
+	limits walkLimits
+	total  int64
+}
+
+func (s *solidCharge) add(it item) error {
+	s.total = saturatingAdd(s.total, it.Size)
+	if s.total > s.limits.budget {
+		return &Error{Entry: it.Name, Reason: s.limits.over}
+	}
+	return nil
+}
+
+// saturatingAdd is a + b for non-negative sizes, stopping at MaxInt64.
+func saturatingAdd(a, b int64) int64 {
+	if b > math.MaxInt64-a {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {
@@ -100,12 +134,19 @@ func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) e
 	if limits.tooMany(len(zr.File)) {
 		return &Error{Reason: ErrTooManyEntries}
 	}
+	charge := solidCharge{limits: limits}
 	for _, f := range zr.File {
 		mode := f.Mode()
 		it := item{
 			Name: f.Name, Size: declared(f.UncompressedSize), IsDir: mode.IsDir(),
 			mode: mode,
-			crc:  &f.CRC32,
+		}
+		// The reader reports a missing digest as zero.
+		if f.CRC32 != 0 {
+			it.crc = &f.CRC32
+		}
+		if err := charge.add(it); err != nil {
+			return err
 		}
 		if err := fn(it, f.Open); err != nil {
 			return err
@@ -114,12 +155,13 @@ func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) e
 	return nil
 }
 
-func walkRAR(src io.Reader, fn walkFunc) error {
+func walkRAR(src io.Reader, limits walkLimits, fn walkFunc) error {
 	// A larger RAR window cannot produce an entry larger than the extraction cap.
 	rr, err := rardecode.NewReader(src, rardecode.MaxDictionarySize(maxDecoderBytes))
 	if err != nil {
 		return wrap("", err)
 	}
+	charge := solidCharge{limits: limits}
 	for {
 		h, err := rr.Next()
 		if errors.Is(err, io.EOF) {
@@ -133,6 +175,9 @@ func walkRAR(src io.Reader, fn walkFunc) error {
 			mode:      rarMode(h),
 			encrypted: h.Encrypted || h.HeaderEncrypted,
 			linkType:  int(h.LinkType),
+		}
+		if err := charge.add(it); err != nil {
+			return err
 		}
 		// The reader verifies the RAR checksum itself when the entry ends.
 		if err := fn(it, func() (io.ReadCloser, error) { return io.NopCloser(rr), nil }); err != nil {

@@ -46,17 +46,14 @@ func (x *extractor) admitEntry(it item, open func() (io.ReadCloser, error)) erro
 	if err := checkKind(it.Name, it.mode); err != nil {
 		return err
 	}
-	// A writer that separates with backslashes ends a folder's name with one too,
-	// which the reader does not see as a folder.
-	isDir := it.IsDir || strings.HasSuffix(it.Name, `\`)
-	rel, err := x.admit(it.Name, isDir)
+	rel, err := x.admit(it.Name, it.IsDir)
 	if err != nil {
 		return err
 	}
 	if rel == "" {
 		return nil
 	}
-	return x.entry(it, rel, isDir, open)
+	return x.entry(it, rel, it.IsDir, open)
 }
 
 // entry creates the directory or writes the file, at the path admit returned.

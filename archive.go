@@ -57,7 +57,9 @@ func (o Options) segment() func(seg string) bool {
 // ratioCap is the most an archive of srcSize bytes may unpack to, or
 // MaxTotalBytes when its size is unknown.
 func (o Options) ratioCap(srcSize int64) int64 {
-	if srcSize <= 0 {
+	// The product cannot exceed MaxTotalBytes once srcSize does, and computing it
+	// past that point could wrap.
+	if srcSize <= 0 || o.MaxRatio <= 0 || srcSize > o.MaxTotalBytes/o.MaxRatio {
 		return o.MaxTotalBytes
 	}
 	return min(o.MaxTotalBytes, max(o.RatioFloor, srcSize*o.MaxRatio))

@@ -38,7 +38,7 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.Entry == "" {
-		return "archive: " + e.Reason.Error()
+		return fmt.Sprintf("archive: %v", e.Reason)
 	}
 	return fmt.Sprintf("archive: entry %q: %v", e.Entry, e.Reason)
 }

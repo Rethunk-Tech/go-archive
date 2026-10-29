@@ -16,8 +16,8 @@ type Entry struct {
 
 // ListerOptions bounds what a Lister may decompress. A zero field means the default.
 type ListerOptions struct {
-	// MaxEntryBytes bounds one entry's decompressed bytes. Zero means maxDecoderBytes (256 MiB),
-	// which is stricter than an extraction cap: callers that list streams must raise it.
+	// MaxEntryBytes bounds one entry's decompressed bytes. Zero means 256 MiB, which is
+	// stricter than an extraction cap: callers that list streams must raise it.
 	MaxEntryBytes int64
 }
 
@@ -26,8 +26,9 @@ type ListerOptions struct {
 // Next reports each entry in order and returns io.EOF at the end. Open gives the
 // current entry's bytes, valid only until the next Next; a caller wanting names
 // and sizes alone calls Next without Open and the decoder skips that entry's
-// bytes. Nothing here counts entries, checks a name against a destination or
-// refuses a link: those are extraction's decisions.
+// bytes. Beyond the 7z header check every reader runs, nothing here counts
+// entries, checks a name against a destination or refuses a link: those are
+// extraction's decisions.
 type Lister struct {
 	src      Source
 	size     int64
@@ -214,7 +215,7 @@ func (l *Lister) drain() (int64, error) {
 // normalise is an entry's name with backslashes as separators and no trailing
 // one, so a folder written as "Mod/" and as "Mod" both list as "Mod".
 func normalise(e Entry) Entry {
-	e.Name = strings.TrimSuffix(strings.ReplaceAll(e.Name, `\`, "/"), "/")
+	e.Name = strings.TrimRight(strings.ReplaceAll(e.Name, `\`, "/"), "/")
 	return e
 }
 

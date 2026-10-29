@@ -143,3 +143,15 @@ func TestDeclaredSizeAgreesWithAListing(t *testing.T) {
 		})
 	}
 }
+
+// Headers can declare anything, so a size sum stops at the largest int64.
+func TestSaturatingAddStopsAtMaxInt64(t *testing.T) {
+	t.Parallel()
+	const maxSize = int64(1<<63 - 1)
+	if got := saturatingAdd(maxSize, maxSize); got != maxSize {
+		t.Fatalf("MaxInt64 + MaxInt64 = %d", got)
+	}
+	if got := saturatingAdd(2, 3); got != 5 {
+		t.Fatalf("2 + 3 = %d", got)
+	}
+}
