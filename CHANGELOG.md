@@ -6,6 +6,8 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
 ### Added
 
 - `Extensions`, `HasExtension`, `StripExtension` and `IsStream` name the file endings of the formats read, for pickers, upload filters and naming the folder an archive unpacks into.
@@ -53,6 +55,7 @@ Notable changes to `go-archive`. The format follows
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
 
-[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rethunk-Tech/go-archive/releases/tag/v0.1.0
