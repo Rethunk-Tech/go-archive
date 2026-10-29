@@ -25,6 +25,11 @@ run = "go tool golangci-lint fmt --diff ./..."
 [gates.crosscompile]
 run = "GOOS=windows GOARCH=amd64 go vet ./..."
 
+# Linux lint never type-checks a _windows.go file, so a Windows-only test can stop compiling
+# with every other gate green. `go tool -n` names the host binary; GOOS only picks the files.
+[gates.lint-windows]
+run = 'GOOS=windows "$(go tool -n golangci-lint)" run --allow-parallel-runners ./...'
+
 # No-op in CI, which never uses --no-verify and already scanned every commit on
 # the way in, so a second scan there spends runner minutes to repeat it. The
 # guard is what keeps one definition serving both hooks.
