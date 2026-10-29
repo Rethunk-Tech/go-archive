@@ -9,6 +9,7 @@ Notable changes to `go-archive`. The format follows
 ### Added
 
 - `Extensions`, `HasExtension`, `StripExtension` and `IsStream` name the file endings of the formats read, for pickers, upload filters and naming the folder an archive unpacks into.
+- `IsMediaType` reports whether a `Content-Type` names a format this package reads, including the types `gh release upload` and shared-mime-info give tarballs. `application/octet-stream` is not one.
 
 ### Changed
 
