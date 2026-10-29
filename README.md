@@ -12,9 +12,9 @@
 One reader for untrusted archives, as a single Go package: `archive`, module
 `github.com/Rethunk-Tech/go-archive`. Mortar is its one consumer.
 
-Magic bytes pick the format, never the file extension. Ten are read: zip, RAR 4, RAR 5, 7z, tar,
-and gzip, xz, lzma, zstd or bzip2, each alone or wrapped around a tar. A zip entry may be
-stored or compressed with Deflate, bzip2, xz or zstd. Archives arrive from the
+Magic bytes pick the format, never the file extension. Eleven are read: zip, RAR 4, RAR 5, 7z,
+tar, and gzip, xz, lzma, zstd, bzip2 or lz4, each alone or wrapped around a tar. A zip entry may
+be stored or compressed with Deflate, bzip2, LZMA, xz or zstd. Archives arrive from the
 internet with no trust attached, so every reader here is bounded in memory and in bytes before it
 produces output.
 

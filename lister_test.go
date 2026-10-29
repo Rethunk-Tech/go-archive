@@ -177,7 +177,7 @@ func TestListerOpenRefusesWhenNoEntryIsCurrent(t *testing.T) {
 
 func TestListerReportsAStreamsBareFile(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma"} {
+	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma", "bare.txt.lz4"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			l := openListerPath(t, filepath.Join("testdata", name), ListerOptions{})
@@ -506,8 +506,8 @@ func TestListerEntriesBoundsABareStream(t *testing.T) {
 	t.Fatal("Entries yielded nothing")
 }
 
-// 7-Zip and WinZip write zip entries with bzip2, xz and zstd; each reads with the
-// stream decoder of the same name.
+// 7-Zip and WinZip write zip entries with bzip2, xz, zstd and LZMA, the last
+// with or without an end marker.
 func TestZipCompressionMethodsBeyondDeflate(t *testing.T) {
 	t.Parallel()
 	want := strings.Repeat("zstd in a zip\n", 200)
@@ -531,7 +531,7 @@ func TestZipCompressionMethodsBeyondDeflate(t *testing.T) {
 	if got := readFile(t, filepath.Join(dest, "z.txt")); got != want {
 		t.Fatalf("zstd entry read %d bytes", len(got))
 	}
-	for _, name := range []string{"method-bzip2.zip", "method-xz.zip"} {
+	for _, name := range []string{"method-bzip2.zip", "method-xz.zip", "method-lzma.zip", "method-lzma-noeos.zip"} {
 		dest, err := extractDir(t, filepath.Join("testdata", name), Options{})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

@@ -14,6 +14,7 @@ require (
 	github.com/bodgit/sevenzip v1.6.5
 	github.com/klauspost/compress v1.20.3
 	github.com/nwaples/rardecode/v2 v2.4.5
+	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/text v0.43.0
 )
@@ -160,7 +161,6 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/pandatix/go-abnf v0.5.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
-	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.73.0 // indirect

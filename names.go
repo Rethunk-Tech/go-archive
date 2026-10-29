@@ -86,8 +86,8 @@ func cleanName(name string, opts Options) (string, error) {
 }
 
 // bareSuffixes are the only suffixes a bare compressed stream carries: one of
-// these five around its payload, never a compound .tar.xz.
-var bareSuffixes = []string{".gz", ".xz", ".zst", ".lzma", ".bz2"}
+// these around its payload, never a compound .tar.xz.
+var bareSuffixes = []string{".gz", ".xz", ".zst", ".lzma", ".bz2", ".lz4"}
 
 // stripBareSuffix removes one bare-stream suffix, matched case-insensitively.
 func stripBareSuffix(name string) string {

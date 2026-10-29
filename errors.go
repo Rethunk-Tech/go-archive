@@ -14,7 +14,7 @@ import (
 // Reasons carried by Error. A disk-full write is reported as the underlying
 // error, so errors.Is(err, syscall.ENOSPC) holds.
 var (
-	ErrUnsupportedFormat = errors.New("not a zip, RAR, 7z, tar, gzip, xz, lzma, zstd or bzip2 archive")
+	ErrUnsupportedFormat = errors.New("not a zip, RAR, 7z, tar, gzip, xz, lzma, zstd, bzip2 or lz4 archive")
 	ErrEncrypted         = errors.New("archive is encrypted")
 	ErrTraversal         = errors.New("path escapes the destination")
 	ErrUnsafeName        = errors.New("name is not allowed")

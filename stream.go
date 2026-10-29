@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
 	"github.com/ulikunitz/xz/lzma"
 )
@@ -60,6 +61,8 @@ func detectStream(head []byte) int {
 		return fmtZstd
 	case len(head) >= 4 && bytes.HasPrefix(head, []byte("BZh")) && head[3] >= '1' && head[3] <= '9':
 		return fmtBzip2
+	case bytes.HasPrefix(head, []byte{0x04, 0x22, 0x4D, 0x18}):
+		return fmtLz4
 	case isTarHeader(head):
 		return fmtTar
 	case looksLikeLZMA(head):
@@ -159,6 +162,9 @@ func decoder(r io.Reader, kind int) (io.Reader, func(), error) {
 		return zr, zr.Close, nil
 	case fmtBzip2:
 		return bzip2.NewReader(r), func() {}, nil
+	case fmtLz4:
+		// A frame's blocks are at most 4 MiB, so the decoder needs no bound of its own.
+		return lz4.NewReader(r), func() {}, nil
 	}
 	return r, func() {}, nil
 }

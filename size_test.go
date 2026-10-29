@@ -13,7 +13,7 @@ import (
 // header says without extracting the file.
 func TestDeclaredSizeOfABareStream(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma"} {
+	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma", "bare.txt.lz4"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if n, err := declaredSize(t, "testdata/"+name); err != nil || n != 14 {

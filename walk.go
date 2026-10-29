@@ -3,6 +3,8 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"io/fs"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/bodgit/sevenzip"
 	"github.com/nwaples/rardecode/v2"
+	"github.com/ulikunitz/xz/lzma"
 )
 
 // item is one entry as a format reader sees it. Entry is what a caller is told;
@@ -63,7 +66,7 @@ func walk(src Source, size int64, baseName string, limits walkLimits, visit walk
 		return walkRAR(io.NewSectionReader(src, 0, size), limits, fn)
 	case fmtSevenZip:
 		return walkSevenZip(src, size, limits, fn)
-	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2:
+	case fmtTar, fmtGzip, fmtXz, fmtLzma, fmtZstd, fmtBzip2, fmtLz4:
 		return walkStream(io.NewSectionReader(src, 0, size), kind, baseName, limits, fn)
 	}
 	return &Error{Reason: ErrUnsupportedFormat}
@@ -120,11 +123,46 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 			encrypted: f.Flags&1 != 0,
 			crc:       &f.CRC32,
 		}
-		if err := fn(it, f.Open); err != nil {
+		open := f.Open
+		if f.Method == zipLZMA {
+			open = func() (io.ReadCloser, error) { return openZipLZMA(f) }
+		}
+		if err := fn(it, open); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+const zipLZMA = 14
+
+// openZipLZMA reads a zip LZMA entry, which archive/zip cannot: a stream
+// written without an end marker stops at the entry's size, and the zip package
+// tells a decompressor no size. The CRC is checked where the bytes are written.
+func openZipLZMA(f *zip.File) (io.ReadCloser, error) {
+	raw, err := f.OpenRaw()
+	if err != nil {
+		return nil, err
+	}
+	// Two version bytes, the properties' length, then the five properties.
+	var head [9]byte
+	if _, err := io.ReadFull(raw, head[:]); err != nil || binary.LittleEndian.Uint16(head[2:4]) != 5 {
+		return nil, ErrMalformed
+	}
+	props := head[4:9]
+	if binary.LittleEndian.Uint32(props[1:]) > uint32(maxDecoderBytes) {
+		return nil, ErrDecoderMemory
+	}
+	size := uint64(math.MaxUint64) // unknown: the general flag's bit 1 says a marker ends it
+	if f.Flags&2 == 0 {
+		size = f.UncompressedSize64
+	}
+	classic := binary.LittleEndian.AppendUint64(bytes.Clone(props), size)
+	lr, err := lzma.NewReader(io.MultiReader(bytes.NewReader(classic), raw))
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(lr), nil
 }
 
 func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {

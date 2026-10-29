@@ -580,7 +580,7 @@ func TestZipNamesInALegacyEncodingBecomeUTF8(t *testing.T) {
 
 func TestStreamFormatsExtractATarByMagicBytes(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"valid.tar", "valid.tar.gz", "valid.tar.xz", "valid.tar.zst", "valid.tar.bz2", "valid.tar.lzma"} {
+	for _, name := range []string{"valid.tar", "valid.tar.gz", "valid.tar.xz", "valid.tar.zst", "valid.tar.bz2", "valid.tar.lzma", "valid.tar.lz4"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// A copy with no extension: only the bytes may decide.
@@ -608,7 +608,7 @@ func TestStreamFormatsExtractATarByMagicBytes(t *testing.T) {
 
 func TestStreamFormatsExtractABareFileNamedWithoutItsSuffix(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma"} {
+	for _, name := range []string{"bare.txt.gz", "bare.txt.xz", "bare.txt.zst", "bare.txt.bz2", "bare.txt.lzma", "bare.txt.lz4"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dest, err := extractDir(t, filepath.Join("testdata", name), Options{})

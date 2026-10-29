@@ -16,6 +16,7 @@ const (
 	fmtLzma
 	fmtZstd
 	fmtBzip2
+	fmtLz4
 )
 
 func detect(head []byte) int {
