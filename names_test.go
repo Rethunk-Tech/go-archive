@@ -106,12 +106,12 @@ func TestStripBareSuffixMatchesCaseInsensitively(t *testing.T) {
 	}
 }
 
-// A leading "id~~" is a caller's prefix, not part of the stream's name.
-func TestSingleNameStripsTheSavedIDSeparator(t *testing.T) {
+// A "~~" is part of the name like any other character: a caller's own prefix
+// convention is the caller's to cut.
+func TestSingleNameKeepsTheWholeName(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"0a1b2c~~notes.txt.gz": "notes.txt",
-		"id~~m.tar":            "m.tar",
+		"0a1b2c~~notes.txt.gz": "0a1b2c~~notes.txt",
 		"notes.txt.gz":         "notes.txt",
 		"":                     "file",
 		".":                    "file",
@@ -120,5 +120,39 @@ func TestSingleNameStripsTheSavedIDSeparator(t *testing.T) {
 		if got := singleName(in); got != want {
 			t.Errorf("singleName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestExtensionTable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, stem   string
+		has, stream bool
+	}{
+		{"a.tar.lz4", "a", true, false},
+		{"B.LZ4", "B", true, true},
+		{"m.tar.gz", "m", true, false},
+		{"M.TGZ", "M", true, false},
+		{"notes.txt.gz", "notes.txt", true, true},
+		{"x.tbz", "x", true, false},
+		{"pack.zip", "pack", true, false},
+		{"readme.txt", "readme.txt", false, false},
+		{"", "", false, false},
+	}
+	for _, c := range cases {
+		if got := HasExtension(c.name); got != c.has {
+			t.Errorf("HasExtension(%q) = %v", c.name, got)
+		}
+		if got := StripExtension(c.name); got != c.stem {
+			t.Errorf("StripExtension(%q) = %q, want %q", c.name, got, c.stem)
+		}
+		if got := IsStream(c.name); got != c.stream {
+			t.Errorf("IsStream(%q) = %v", c.name, got)
+		}
+	}
+	e := Extensions()
+	e[0] = "mutated"
+	if Extensions()[0] != ".tar.gz" {
+		t.Error("Extensions shares its slice with the caller")
 	}
 }

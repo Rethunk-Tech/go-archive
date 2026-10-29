@@ -6,6 +6,18 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `Extensions`, `HasExtension`, `StripExtension` and `IsStream` name the file endings of the formats read, for pickers, upload filters and naming the folder an archive unpacks into.
+
+### Changed
+
+- `baseName` no longer drops a `~~` prefix: a bare stream's file is named from the whole `baseName`, less one stream suffix. A caller with its own prefix convention cuts it first.
+
+### Fixed
+
+- An empty tar named `.tbz` lists and extracts as zero entries, like the other tar endings.
+
 ## [0.1.1] - 2026-10-29
 
 ### Changed

@@ -882,7 +882,7 @@ func TestEmptyTarIsAnArchiveWithNoEntries(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for name, b := range map[string][]byte{"e.tar": tarBuf.Bytes(), "e.tar.gz": gzBuf.Bytes()} {
+	for name, b := range map[string][]byte{"e.tar": tarBuf.Bytes(), "e.tar.gz": gzBuf.Bytes(), "e.TBZ": tarBuf.Bytes()} {
 		dest, err := extractDir(t, writeTemp(t, name, b), Options{})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

@@ -11,7 +11,6 @@ import (
 	"io"
 	"math"
 	"slices"
-	"strings"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
@@ -84,12 +83,7 @@ func emptyTar(head []byte, baseName string) bool {
 	if len(head) < headLen || slices.ContainsFunc(head[:headLen], func(b byte) bool { return b != 0 }) {
 		return false
 	}
-	if _, original, ok := strings.Cut(baseName, "~~"); ok {
-		baseName = original
-	}
-	n := strings.ToLower(baseName)
-	return strings.Contains(n+".", ".tar.") || strings.HasSuffix(n, ".tgz") ||
-		strings.HasSuffix(n, ".tbz2") || strings.HasSuffix(n, ".txz") || strings.HasSuffix(n, ".tzst")
+	return isTarName(baseName)
 }
 
 // limitReader fails with reason once more than its budget has been read,
@@ -222,9 +216,6 @@ func (d zipDecoder) Close() error {
 // singleName is the name a bare compressed file lists under: the name the
 // caller supplied, without its stream suffix when it has one.
 func singleName(baseName string) string {
-	if _, original, ok := strings.Cut(baseName, "~~"); ok {
-		baseName = original
-	}
 	name := stripBareSuffix(baseName)
 	if name == "" || name == "." {
 		return "file"
