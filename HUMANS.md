@@ -73,6 +73,8 @@ for {
 | `Entry.Name` | normalised: `\` becomes `/`, a trailing `/` is dropped |
 | A skipped entry | reports the size its header declared, which an archive can set to anything; a RAR entry of unknown size reports 0 and a bare stream `-1` |
 | `Entries()` | reports each header's size and drains only a bare stream, whose `-1` becomes the bytes actually there |
+| Links in a listing | `Entry` carries no mode or link flag, so a symlink or hard link lists as an ordinary file; `Extract` refuses it with `ErrLink` |
+| `DeclaredSize` | sums the sizes the headers declare, which an archive can set to anything, so it informs and never checks; it runs the 7z header walk and the RAR dictionary cap, and a stream over the default caps reports the cap with a nil error |
 
 ## Caps
 
