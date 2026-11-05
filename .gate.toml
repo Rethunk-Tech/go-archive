@@ -28,8 +28,10 @@ run = "GOOS=windows GOARCH=amd64 go vet ./..."
 
 # Linux lint never type-checks a _windows.go file, so a Windows-only test can stop compiling
 # with every other gate green. `go tool -n` names the host binary; GOOS only picks the files.
+# It runs a private copy because a sibling gate's `go tool` can still hold the cached file open
+# for writing on a cold cache, and executing that file then fails with "Text file busy".
 [gates.lint-windows]
-run = 'GOGC=400 GOOS=windows "$(go tool -n golangci-lint)" run --allow-parallel-runners ./...'
+run = 'd=$(mktemp -d) && trap "rm -rf \"$d\"" EXIT && cp "$(go tool -n golangci-lint)" "$d/golangci-lint" && GOGC=400 GOOS=windows "$d/golangci-lint" run --allow-parallel-runners ./...'
 
 # No-op in CI, which never uses --no-verify and already scanned every commit on
 # the way in, so a second scan there spends runner minutes to repeat it. The
