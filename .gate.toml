@@ -5,8 +5,9 @@
 # checks never executed. Each override below runs the module's own pinned binary
 # through `go tool`, or the checksummed download for actionlint, which is not a
 # module.
+# golangci-lint spends about a third of its CPU in GC at the default GOGC, and a cold gate is CPU-bound.
 [gates.lint]
-run = "go tool golangci-lint run --allow-parallel-runners ./..."
+run = "GOGC=400 go tool golangci-lint run --allow-parallel-runners ./..."
 
 [gates.vuln]
 run = "go tool govulncheck ./..."
@@ -28,7 +29,7 @@ run = "GOOS=windows GOARCH=amd64 go vet ./..."
 # Linux lint never type-checks a _windows.go file, so a Windows-only test can stop compiling
 # with every other gate green. `go tool -n` names the host binary; GOOS only picks the files.
 [gates.lint-windows]
-run = 'GOOS=windows "$(go tool -n golangci-lint)" run --allow-parallel-runners ./...'
+run = 'GOGC=400 GOOS=windows "$(go tool -n golangci-lint)" run --allow-parallel-runners ./...'
 
 # No-op in CI, which never uses --no-verify and already scanned every commit on
 # the way in, so a second scan there spends runner minutes to repeat it. The
