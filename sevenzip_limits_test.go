@@ -274,7 +274,7 @@ func TestSevenZipBCJ2Extracts(t *testing.T) {
 // goes on to report the rest and nothing fails along the way.
 func TestListerLeavesASolidFolderReadPartway(t *testing.T) {
 	t.Parallel()
-	l := openListerPath(t, filepath.Join("testdata", "solid-zeros.7z"), ListerOptions{})
+	l := openListerPath(t, filepath.Join("testdata", "solid-small.7z"), ListerOptions{})
 	read, seen := false, 0
 	for {
 		e, err := l.Next()
