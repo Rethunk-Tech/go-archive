@@ -179,7 +179,7 @@ func openZipLZMA(f *zip.File) (io.ReadCloser, error) {
 }
 
 func walkSevenZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error {
-	encrypted, err := checkSevenZipLimits(src, size)
+	encrypted, err := checkSevenZipLimits(src, size, limits.maxEntries)
 	if err != nil {
 		return wrap("", err)
 	}

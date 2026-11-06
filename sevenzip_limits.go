@@ -12,18 +12,21 @@ import (
 var errSevenZipHeader = fmt.Errorf("%w: invalid 7z header", ErrMalformed)
 
 const (
-	sevenZipMaxFolders  = uint64(DefaultMaxEntries)
 	sevenZipMaxCoders   = 64
 	sevenZipMaxStreams  = 64
 	sevenZipMaxProperty = 16 << 20
 	// sevenZipMaxHeader bounds a compressed header once decoded; one that lists
-	// DefaultMaxEntries files is a few megabytes.
+	// DefaultMaxEntries files is a few megabytes. It is also the structural
+	// ceiling on any count in the header: every counted item takes at least a
+	// byte, so a larger count is malformed whatever MaxEntries says.
 	sevenZipMaxHeader = 64 << 20
 )
 
 // checkSevenZipLimits walks a 7z's headers before the reader parses them, and
-// reports whether any folder is encrypted.
-func checkSevenZipLimits(r io.ReaderAt, size int64) (encrypted bool, err error) {
+// reports whether any folder is encrypted. A count above maxEntries fails as
+// ErrTooManyEntries before the reader allocates for it; maxEntries 0 means no
+// cap and holds counts to DefaultMaxEntries.
+func checkSevenZipLimits(r io.ReaderAt, size int64, maxEntries int) (encrypted bool, err error) {
 	if size < 32 {
 		return false, errSevenZipHeader
 	}
@@ -45,7 +48,7 @@ func checkSevenZipLimits(r io.ReaderAt, size int64) (encrypted bool, err error) 
 	if err != nil {
 		return false, err
 	}
-	c := sevenZipCursor{r: io.NewSectionReader(r, 32+offset, length), src: r, size: size}
+	c := sevenZipCursor{r: io.NewSectionReader(r, 32+offset, length), src: r, size: size, maxEntries: uint64(max(maxEntries, 0))}
 	err = parseSevenZipHeader(&c)
 	return c.aes, err
 }
@@ -69,6 +72,23 @@ type sevenZipCursor struct {
 	enc *sevenZipEncoded
 	// aes is set once a folder of the archive's own entries is encrypted.
 	aes bool
+	// maxEntries is the caller's entry cap, 0 for none.
+	maxEntries uint64
+}
+
+// count checks a header count that the reader allocates for.
+func (c *sevenZipCursor) count(n uint64) error {
+	ceiling := uint64(sevenZipMaxHeader)
+	if c.maxEntries == 0 {
+		ceiling = DefaultMaxEntries
+	}
+	if n > ceiling {
+		return errSevenZipHeader
+	}
+	if c.maxEntries != 0 && n > c.maxEntries {
+		return &Error{Reason: ErrTooManyEntries}
+	}
+	return nil
 }
 
 func (c *sevenZipCursor) byte() (byte, error) {
@@ -178,8 +198,11 @@ func skipSevenZipProperties(c *sevenZipCursor) error {
 
 func skipSevenZipFilesInfo(c *sevenZipCursor) error {
 	n, err := c.uint()
-	if err != nil || n > sevenZipMaxFolders {
+	if err != nil {
 		return errSevenZipHeader
+	}
+	if err := c.count(n); err != nil {
+		return err
 	}
 	return skipSevenZipProperties(c)
 }
@@ -218,8 +241,11 @@ func parseSevenZipPackInfo(c *sevenZipCursor) error {
 		c.enc.packPos = packPos
 	}
 	n, err := c.uint()
-	if err != nil || n > sevenZipMaxFolders {
+	if err != nil {
 		return errSevenZipHeader
+	}
+	if err := c.count(n); err != nil {
+		return err
 	}
 	for {
 		id, err := c.byte()
@@ -260,14 +286,17 @@ func parseSevenZipUnpackInfo(c *sevenZipCursor) ([]sevenZipFolder, error) {
 		return nil, errSevenZipHeader
 	}
 	n, err := c.uint()
-	if err != nil || n == 0 || n > sevenZipMaxFolders {
+	if err != nil || n == 0 {
 		return nil, errSevenZipHeader
+	}
+	if err := c.count(n); err != nil {
+		return nil, err
 	}
 	external, err := c.byte()
 	if err != nil || external != 0 {
 		return nil, errSevenZipHeader
 	}
-	folders := make([]sevenZipFolder, 0, n)
+	folders := make([]sevenZipFolder, 0, min(n, 1<<10))
 	for range n {
 		folder, err := parseSevenZipFolder(c)
 		if err != nil {
@@ -507,10 +536,13 @@ func skipSevenZipSubStreams(c *sevenZipCursor, folders []sevenZipFolder) error {
 				if err != nil || counts[i] == 0 {
 					return errSevenZipHeader
 				}
+				if err := c.count(counts[i]); err != nil {
+					return err
+				}
 				total += counts[i]
 			}
-			if total > sevenZipMaxFolders {
-				return errSevenZipHeader
+			if err := c.count(total); err != nil {
+				return err
 			}
 		case 0x09:
 			for _, count := range counts {
@@ -606,7 +638,7 @@ func parseSevenZipEncodedHeader(c *sevenZipCursor) error {
 	if err != nil {
 		return err
 	}
-	hc := sevenZipCursor{r: bytes.NewReader(header)}
+	hc := sevenZipCursor{r: bytes.NewReader(header), maxEntries: c.maxEntries}
 	if id, err := hc.byte(); err != nil || id != 0x01 {
 		return errSevenZipHeader
 	}

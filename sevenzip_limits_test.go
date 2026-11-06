@@ -112,7 +112,7 @@ func TestSevenZipFilesInfoAfterSubStreamsIsChecked(t *testing.T) {
 	hdr = append(hdr, 0x08, 0x00, 0x00)
 	hdr = append(hdr, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00)
 	b := sevenZipWith(hdr, []byte("x"))
-	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b))); !errors.Is(err, ErrMalformed) {
+	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0); !errors.Is(err, ErrMalformed) {
 		t.Fatalf("got %v, want ErrMalformed for 2^64-1 files", err)
 	}
 }
@@ -299,5 +299,34 @@ func TestListerLeavesASolidFolderReadPartway(t *testing.T) {
 	}
 	if !read || seen != 2 {
 		t.Fatalf("read %v across %d entries", read, seen)
+	}
+}
+
+// many-entries.7z lists DefaultMaxEntries+1 empty files; the header walk must
+// leave the entry cap to say so.
+func TestSevenZipEntryCapFollowsMaxEntries(t *testing.T) {
+	t.Parallel()
+	src := filepath.Join("testdata", "many-entries.7z")
+	dest, err := extractDir(t, src, Options{})
+	wantReason(t, err, ErrTooManyEntries, "")
+	if ents, _ := os.ReadDir(dest); len(ents) != 0 {
+		t.Fatalf("wrote %d entries", len(ents))
+	}
+	dest, err = extractDir(t, src, Options{MaxEntries: DefaultMaxEntries + 1})
+	if err != nil {
+		t.Fatalf("raised cap: %v", err)
+	}
+	if ents, _ := os.ReadDir(dest); len(ents) != DefaultMaxEntries+1 {
+		t.Fatalf("wrote %d entries, want %d", len(ents), DefaultMaxEntries+1)
+	}
+}
+
+func TestSevenZipTruncatedHeaderStaysMalformed(t *testing.T) {
+	t.Parallel()
+	b := sevenZipWith([]byte{0x01, 0x05}, nil)
+	for _, limit := range []int{0, 1, 1 << 30} {
+		if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), limit); !errors.Is(err, ErrMalformed) {
+			t.Fatalf("limit %d: got %v, want ErrMalformed", limit, err)
+		}
 	}
 }
