@@ -313,16 +313,8 @@ func parseSevenZipUnpackInfo(c *sevenZipCursor) ([]sevenZipFolder, error) {
 		case 0:
 			return folders, nil
 		case 0x0C:
-			for _, folder := range folders {
-				for i := uint64(0); i < folder.outStreams; i++ {
-					size, err := c.uint()
-					if err != nil {
-						return nil, err
-					}
-					if c.enc != nil {
-						c.enc.unpackSizes = append(c.enc.unpackSizes, size)
-					}
-				}
+			if err := readSevenZipUnpackSizes(c, folders); err != nil {
+				return nil, err
 			}
 		case 0x0A:
 			if err := parseSevenZipCRCs(c, n); err != nil {
@@ -334,6 +326,28 @@ func parseSevenZipUnpackInfo(c *sevenZipCursor) ([]sevenZipFolder, error) {
 	}
 }
 
+func readSevenZipUnpackSizes(c *sevenZipCursor, folders []sevenZipFolder) error {
+	for _, folder := range folders {
+		for range folder.outStreams {
+			size, err := c.uint()
+			if err != nil {
+				return err
+			}
+			if c.enc != nil {
+				c.enc.unpackSizes = append(c.enc.unpackSizes, size)
+			}
+		}
+	}
+	return nil
+}
+
+// sevenZipCoderTally accumulates what a folder's coders cost together.
+type sevenZipCoderTally struct {
+	memory      uint64
+	compressors int
+	bcj2        bool
+}
+
 func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 	n, err := c.uint()
 	if err != nil || n == 0 || n > sevenZipMaxCoders {
@@ -343,108 +357,124 @@ func parseSevenZipFolder(c *sevenZipCursor) (sevenZipFolder, error) {
 	// The coders of one folder are all alive while it decodes, so their
 	// memory adds up; and 7-Zip writes one compressor per folder, or three
 	// behind BCJ2, so a longer chain only multiplies work.
-	var memory uint64
-	compressors, bcj2 := 0, false
+	var tally sevenZipCoderTally
 	for range n {
-		main, err := c.byte()
-		if err != nil {
+		if err := parseSevenZipCoder(c, &folder, &tally); err != nil {
 			return sevenZipFolder{}, err
-		}
-		idSize := int(main & 0x0F)
-		if idSize == 0 {
-			return sevenZipFolder{}, errSevenZipHeader
-		}
-		var method [16]byte
-		if _, err := io.ReadFull(c.r, method[:idSize]); err != nil {
-			return sevenZipFolder{}, errSevenZipHeader
-		}
-		inStreams, outStreams := uint64(1), uint64(1)
-		if main&0x10 != 0 {
-			inStreams, err = c.uint()
-			if err != nil {
-				return sevenZipFolder{}, err
-			}
-			outStreams, err = c.uint()
-			if err != nil {
-				return sevenZipFolder{}, err
-			}
-			if inStreams == 0 || outStreams == 0 || inStreams > sevenZipMaxStreams || outStreams > sevenZipMaxStreams {
-				return sevenZipFolder{}, errSevenZipHeader
-			}
-		}
-		folder.inStreams += inStreams
-		folder.outStreams += outStreams
-		switch m := method[:idSize]; {
-		case bytes.Equal(m, sevenZipAES):
-			if c.enc == nil {
-				c.aes = true
-			}
-		case bytes.Equal(m, sevenZipBCJ2):
-			bcj2 = true
-		case !sevenZipFilter(m):
-			compressors++
-		}
-		if c.enc != nil {
-			c.enc.coders = append(c.enc.coders, sevenZipCoder{method: bytes.Clone(method[:idSize])})
-		}
-		if main&0x20 == 0 {
-			continue
-		}
-		propsSize, err := c.uint()
-		if err != nil {
-			return sevenZipFolder{}, err
-		}
-		if propsSize <= 8 {
-			props := make([]byte, propsSize)
-			if _, err := io.ReadFull(c.r, props); err != nil {
-				return sevenZipFolder{}, errSevenZipHeader
-			}
-			mem, err := checkSevenZipCoder(method[:idSize], propsSize, props)
-			if err != nil {
-				return sevenZipFolder{}, err
-			}
-			if memory += mem; memory > uint64(maxDecoderBytes) {
-				return sevenZipFolder{}, ErrDecoderMemory
-			}
-			if c.enc != nil {
-				c.enc.coders[len(c.enc.coders)-1].props = props
-			}
-		} else {
-			if err := c.skip(propsSize); err != nil {
-				return sevenZipFolder{}, err
-			}
-			if _, err := checkSevenZipCoder(method[:idSize], propsSize, nil); err != nil {
-				return sevenZipFolder{}, err
-			}
 		}
 	}
-	if compressors > 1 && (!bcj2 || compressors > 3) {
+	if tally.compressors > 1 && (!tally.bcj2 || tally.compressors > 3) {
 		return sevenZipFolder{}, errSevenZipHeader
 	}
+	if err := skipSevenZipBindings(c, folder); err != nil {
+		return sevenZipFolder{}, err
+	}
+	return folder, nil
+}
+
+func skipSevenZipBindings(c *sevenZipCursor, folder sevenZipFolder) error {
 	bindPairs := folder.outStreams - 1
 	for range bindPairs {
 		if _, err := c.uint(); err != nil {
-			return sevenZipFolder{}, err
+			return err
 		}
 		if _, err := c.uint(); err != nil {
-			return sevenZipFolder{}, err
+			return err
 		}
 	}
 	if folder.inStreams < bindPairs {
-		return sevenZipFolder{}, errSevenZipHeader
+		return errSevenZipHeader
 	}
 	packedStreams := folder.inStreams - bindPairs
 	if packedStreams == 0 || packedStreams > sevenZipMaxStreams {
-		return sevenZipFolder{}, errSevenZipHeader
+		return errSevenZipHeader
 	}
 	if packedStreams != 1 {
 		for range packedStreams {
 			if _, err := c.uint(); err != nil {
-				return sevenZipFolder{}, err
+				return err
 			}
 		}
 	}
-	return folder, nil
+	return nil
+}
+
+func parseSevenZipCoder(c *sevenZipCursor, folder *sevenZipFolder, tally *sevenZipCoderTally) error {
+	main, err := c.byte()
+	if err != nil {
+		return err
+	}
+	idSize := int(main & 0x0F)
+	if idSize == 0 {
+		return errSevenZipHeader
+	}
+	var methodBuf [16]byte
+	if _, err := io.ReadFull(c.r, methodBuf[:idSize]); err != nil {
+		return errSevenZipHeader
+	}
+	method := methodBuf[:idSize]
+	inStreams, outStreams := uint64(1), uint64(1)
+	if main&0x10 != 0 {
+		inStreams, err = c.uint()
+		if err != nil {
+			return err
+		}
+		outStreams, err = c.uint()
+		if err != nil {
+			return err
+		}
+		if inStreams == 0 || outStreams == 0 || inStreams > sevenZipMaxStreams || outStreams > sevenZipMaxStreams {
+			return errSevenZipHeader
+		}
+	}
+	folder.inStreams += inStreams
+	folder.outStreams += outStreams
+	switch {
+	case bytes.Equal(method, sevenZipAES):
+		if c.enc == nil {
+			c.aes = true
+		}
+	case bytes.Equal(method, sevenZipBCJ2):
+		tally.bcj2 = true
+	case !sevenZipFilter(method):
+		tally.compressors++
+	}
+	if c.enc != nil {
+		c.enc.coders = append(c.enc.coders, sevenZipCoder{method: bytes.Clone(method)})
+	}
+	if main&0x20 == 0 {
+		return nil
+	}
+	return parseSevenZipCoderProps(c, method, tally)
+}
+
+func parseSevenZipCoderProps(c *sevenZipCursor, method []byte, tally *sevenZipCoderTally) error {
+	propsSize, err := c.uint()
+	if err != nil {
+		return err
+	}
+	if propsSize > 8 {
+		if err := c.skip(propsSize); err != nil {
+			return err
+		}
+		_, err := checkSevenZipCoder(method, propsSize, nil)
+		return err
+	}
+	props := make([]byte, propsSize)
+	if _, err := io.ReadFull(c.r, props); err != nil {
+		return errSevenZipHeader
+	}
+	mem, err := checkSevenZipCoder(method, propsSize, props)
+	if err != nil {
+		return err
+	}
+	if tally.memory += mem; tally.memory > uint64(maxDecoderBytes) {
+		return ErrDecoderMemory
+	}
+	if c.enc != nil {
+		c.enc.coders[len(c.enc.coders)-1].props = props
+	}
+	return nil
 }
 
 // checkSevenZipCoder reports the memory a coder's properties ask for: the LZMA
@@ -530,18 +560,7 @@ func skipSevenZipSubStreams(c *sevenZipCursor, folders []sevenZipFolder) error {
 		case 0:
 			return nil
 		case 0x0D:
-			var total uint64
-			for i := range counts {
-				counts[i], err = c.uint()
-				if err != nil || counts[i] == 0 {
-					return errSevenZipHeader
-				}
-				if err := c.count(counts[i]); err != nil {
-					return err
-				}
-				total += counts[i]
-			}
-			if err := c.count(total); err != nil {
+			if err := readSevenZipSubStreamCounts(c, counts); err != nil {
 				return err
 			}
 		case 0x09:
@@ -564,6 +583,22 @@ func skipSevenZipSubStreams(c *sevenZipCursor, folders []sevenZipFolder) error {
 			return errSevenZipHeader
 		}
 	}
+}
+
+func readSevenZipSubStreamCounts(c *sevenZipCursor, counts []uint64) error {
+	var total uint64
+	for i := range counts {
+		var err error
+		counts[i], err = c.uint()
+		if err != nil || counts[i] == 0 {
+			return errSevenZipHeader
+		}
+		if err := c.count(counts[i]); err != nil {
+			return err
+		}
+		total += counts[i]
+	}
+	return c.count(total)
 }
 
 func parseSevenZipCRCs(c *sevenZipCursor, n uint64) error {
