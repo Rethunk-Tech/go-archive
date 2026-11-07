@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -539,5 +540,55 @@ func TestZipCompressionMethodsBeyondDeflate(t *testing.T) {
 		if got := readFile(t, filepath.Join(dest, "nums.txt")); !strings.HasPrefix(got, "1\n2\n") || !strings.HasSuffix(got, "20000\n") {
 			t.Fatalf("%s: nums.txt is %d bytes", name, len(got))
 		}
+	}
+}
+
+// eocdOnly is a zip with no readable directory whose end record declares count entries over dirSize bytes, so only a
+// check that runs before the directory is parsed can answer ErrTooManyEntries.
+func eocdOnly(count uint16, dirSize uint32) []byte {
+	b := make([]byte, 22)
+	copy(b, "PK\x05\x06")
+	binary.LittleEndian.PutUint16(b[8:], count)
+	binary.LittleEndian.PutUint16(b[10:], count)
+	binary.LittleEndian.PutUint32(b[12:], dirSize)
+	return b
+}
+
+func zip64EOCDOnly(count, dirSize uint64) []byte {
+	head := append([]byte("PK\x03\x04"), make([]byte, 26)...)
+	rec := make([]byte, 56)
+	copy(rec, "PK\x06\x06")
+	binary.LittleEndian.PutUint64(rec[4:], 44)
+	binary.LittleEndian.PutUint64(rec[32:], count)
+	binary.LittleEndian.PutUint64(rec[40:], dirSize)
+	loc := make([]byte, 20)
+	copy(loc, "PK\x06\x07")
+	binary.LittleEndian.PutUint64(loc[8:], uint64(len(head)))
+	end := eocdOnly(0xFFFF, 0xFFFFFFFF)
+	return append(append(append(head, rec...), loc...), end...)
+}
+
+func TestZipDeclaringTooManyEntriesIsRefusedBeforeItsDirectoryIsRead(t *testing.T) {
+	for name, b := range map[string][]byte{
+		"count":   eocdOnly(30000, 100),
+		"dirsize": eocdOnly(1, 1<<30),
+		"zip64":   zip64EOCDOnly(1_000_000, 46_000_000),
+	} {
+		_, err := NewLister(bytes.NewReader(b), int64(len(b)), "x.zip", ListerOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		l, _ := NewLister(bytes.NewReader(b), int64(len(b)), "x.zip", ListerOptions{})
+		_, err = l.Next()
+		_ = l.Close()
+		if !errors.Is(err, ErrTooManyEntries) {
+			t.Fatalf("%s: Next = %v, want ErrTooManyEntries", name, err)
+		}
+	}
+	b := eocdOnly(30000, 100)
+	l, _ := NewLister(bytes.NewReader(b), int64(len(b)), "x.zip", ListerOptions{MaxEntries: 40000})
+	defer func() { _ = l.Close() }()
+	if _, err := l.Next(); errors.Is(err, ErrTooManyEntries) {
+		t.Fatal("a raised cap still refused")
 	}
 }

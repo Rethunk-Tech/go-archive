@@ -24,6 +24,8 @@ This package reads untrusted archives. A report is a crafted input that escapes 
   such a panic into `ErrMalformed` for a deferred call, but a reachable panic is still a bug.
 - A `Lister` that decompresses past `ListerOptions.MaxEntryBytes`, or reports a size that differs
   from the bytes it yields.
+- A zip whose end record declares more entries than the cap (`MaxEntries`, or `ListerOptions.MaxEntries`), or a
+  directory larger than 1 KiB per allowed entry, that is parsed instead of refused up front.
 - A ratio or size cap that a crafted archive can satisfy while extracting more than the cap allows.
 
 Format detection is by magic bytes, so a file whose extension disagrees with its contents is read as

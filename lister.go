@@ -19,6 +19,9 @@ type ListerOptions struct {
 	// MaxEntryBytes bounds one entry's decompressed bytes. Zero means 256 MiB, which is
 	// stricter than an extraction cap: callers that list streams must raise it.
 	MaxEntryBytes int64
+	// MaxEntries bounds how many entries a zip may declare, checked before the zip's directory is read. Zero means
+	// DefaultMaxEntries. Other formats are not counted.
+	MaxEntries int
 }
 
 // Lister walks an archive's entries once, forward.
@@ -26,8 +29,8 @@ type ListerOptions struct {
 // Next reports each entry in order and returns io.EOF at the end. Open gives the
 // current entry's bytes, valid only until the next Next; a caller wanting names
 // and sizes alone calls Next without Open and the decoder skips that entry's
-// bytes. Beyond the 7z header check every reader runs, nothing here counts
-// entries, checks a name against a destination or refuses a link: those are
+// bytes. Beyond the entry cap and the 7z header check every reader runs, nothing here
+// checks a name against a destination or refuses a link: those are
 // extraction's decisions.
 type Lister struct {
 	src      Source
@@ -62,6 +65,9 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 	if opts.MaxEntryBytes == 0 {
 		opts.MaxEntryBytes = maxDecoderBytes
 	}
+	if opts.MaxEntries == 0 {
+		opts.MaxEntries = DefaultMaxEntries
+	}
 	if detectSource(src, baseName) == fmtNone {
 		return nil, &Error{Reason: ErrUnsupportedFormat}
 	}
@@ -82,10 +88,9 @@ func NewLister(src Source, size int64, baseName string, opts ListerOptions) (*Li
 			}
 		}()
 		// A stream cannot be enumerated without decompressing it, so the listing
-		// keeps Extract's default stream bound, ratio included. It has no entry
-		// cap: counting is the caller's policy.
+		// keeps Extract's default stream bound, ratio included.
 		limits := Options{}.withDefaults().streamLimits(l.size)
-		limits.maxEntries = 0
+		limits.maxEntries = l.opts.MaxEntries
 		err = walk(l.src, l.size, l.baseName, limits, func(it item, open func() (io.ReadCloser, error)) error {
 			if !yield(walkStep{item: it, open: open}, nil) {
 				return errWalkStop
