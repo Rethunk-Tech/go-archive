@@ -498,6 +498,8 @@ type rarFile struct {
 	compressionInfo uint64
 	symlinkTo       string
 	encrypted       bool
+	// declared, when non-zero, is the unpacked size the header claims instead of len(data).
+	declared uint64
 }
 
 func vint(n uint64) []byte {
@@ -549,8 +551,12 @@ func buildRar(t *testing.T, files ...rarFile) string {
 		}
 		c = append(c, vint(uint64(len(f.data)))...) // packed size
 		c = append(c, vint(0x04)...)                // crc32 present
-		c = append(c, vint(uint64(len(f.data)))...) // unpacked size
-		c = append(c, vint(0o644)...)               // attributes
+		unpacked := uint64(len(f.data))
+		if f.declared != 0 {
+			unpacked = f.declared
+		}
+		c = append(c, vint(unpacked)...) // unpacked size
+		c = append(c, vint(0o644)...)    // attributes
 		crc := make([]byte, 4)
 		binary.LittleEndian.PutUint32(crc, crc32.ChecksumIEEE([]byte(f.data)))
 		c = append(c, crc...)

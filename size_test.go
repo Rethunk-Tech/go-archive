@@ -65,6 +65,20 @@ func TestDeclaredSizeRefusesACraftedRARWindow(t *testing.T) {
 	}
 }
 
+// Headers can claim any unpacked size, and a solid RAR decodes what it skips to reach the next entry, so the sum a
+// listing walks past is held to the stream budget instead of being unbounded.
+func TestDeclaredSizeBoundsWhatARARClaims(t *testing.T) {
+	t.Parallel()
+	path := buildRar(t,
+		rarFile{name: "a", data: "x", declared: 1 << 40},
+		rarFile{name: "b", data: "y", declared: 1 << 40},
+	)
+	n, err := declaredSize(t, path)
+	if !errors.Is(err, ErrArchiveTooLarge) && !errors.Is(err, ErrRatio) {
+		t.Fatalf("DeclaredSize = %d, %v; want a budget refusal", n, err)
+	}
+}
+
 // Past the ratio a stream fails with ErrRatio, which streamSize turns into the
 // cap it reports rather than an error.
 func TestStreamBudgetPastTheRatioFailsWithErrRatio(t *testing.T) {
