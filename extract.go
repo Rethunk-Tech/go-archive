@@ -196,10 +196,10 @@ func (x *extractor) admit(name string, isDir bool) (string, error) {
 		segs := strings.Split(rel, "/")
 		for i := range segs {
 			p := strings.Join(segs[:i+1], "/")
-			if prev, ok := x.seen[strings.ToLower(p)]; ok && prev != p {
+			if prev, ok := x.seen[foldKey(p)]; ok && prev != p {
 				return "", &Error{Entry: name, Reason: ErrCaseCollision}
 			}
-			x.seen[strings.ToLower(p)] = p
+			x.seen[foldKey(p)] = p
 		}
 	}
 	if !isDir {

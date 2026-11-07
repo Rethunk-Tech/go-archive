@@ -6,6 +6,11 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A zip whose end record understates its central directory no longer slips past the entry cap: the records are counted before `archive/zip` builds them. `DeclaredSize` honours the cap too.
+- The case-collision check folds names as a case-insensitive file system does (ς and σ, ſ and s), not with `strings.ToLower`.
+
 ## [0.2.0] - 2026-10-29
 
 ### Added

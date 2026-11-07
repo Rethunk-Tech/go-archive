@@ -4,6 +4,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -151,4 +152,16 @@ func stripBareSuffix(name string) string {
 		}
 	}
 	return name
+}
+
+// foldKey is s with every rune replaced by the smallest of its case orbit, so names a case-insensitive file system
+// stores as one (ς and σ, ſ and s, µ and μ) get one key, which strings.ToLower does not give them.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		return least
+	}, s)
 }

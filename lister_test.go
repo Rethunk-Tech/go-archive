@@ -570,9 +570,8 @@ func zip64EOCDOnly(count, dirSize uint64) []byte {
 
 func TestZipDeclaringTooManyEntriesIsRefusedBeforeItsDirectoryIsRead(t *testing.T) {
 	for name, b := range map[string][]byte{
-		"count":   eocdOnly(30000, 100),
-		"dirsize": eocdOnly(1, 1<<30),
-		"zip64":   zip64EOCDOnly(1_000_000, 46_000_000),
+		"count": eocdOnly(30000, 100),
+		"zip64": zip64EOCDOnly(1_000_000, 46_000_000),
 	} {
 		_, err := NewLister(bytes.NewReader(b), int64(len(b)), "x.zip", ListerOptions{})
 		if err != nil {

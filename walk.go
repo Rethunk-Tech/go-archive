@@ -3,6 +3,7 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -151,18 +152,19 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 }
 
 const (
-	zipEOCDSize       = 22
-	zipEOCDSig        = 0x06054b50
-	zip64LocatorSize  = 20
-	zip64LocatorSig   = 0x07064b50
-	zip64EOCDSig      = 0x06064b50
-	zip64EOCDMinSize  = 56
-	zipMaxComment     = 1<<16 - 1
-	zipDirBytesPerRec = 1024
+	zipEOCDSize      = 22
+	zipEOCDSig       = 0x06054b50
+	zip64LocatorSize = 20
+	zip64LocatorSig  = 0x07064b50
+	zip64EOCDSig     = 0x06064b50
+	zip64EOCDMinSize = 56
+	zipMaxComment    = 1<<16 - 1
+	zipMinRecord     = 46 // fixed part of a central-directory record
+	zipCDSig         = 0x02014b50
 )
 
-// checkZipDirectory refuses a zip whose end-of-central-directory record declares more entries, or a bigger
-// directory, than the entry cap allows. archive/zip builds every record in memory before a caller can count them, so
+// checkZipDirectory refuses a zip whose end-of-central-directory record declares more entries than the entry cap allows,
+// or whose directory spans more bytes than that many records could fill. archive/zip builds every record in memory before a caller can count them, so
 // the check has to come first. Anything it cannot read is left for zip.NewReader to refuse.
 func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	if limits.maxEntries <= 0 || size < zipEOCDSize {
@@ -183,34 +185,77 @@ func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	}
 	count := uint64(binary.LittleEndian.Uint16(eocd[10:]))
 	dirSize := uint64(binary.LittleEndian.Uint32(eocd[12:]))
-	if count == 0xFFFF || dirSize == 0xFFFFFFFF {
-		if c, d, ok := zip64Counts(src, size, size-tail+int64(i)); ok {
-			count, dirSize = c, d
+	dirOffset := uint64(binary.LittleEndian.Uint32(eocd[16:]))
+	eocdAt := size - tail + int64(i)
+	if count == 0xFFFF || dirSize == 0xFFFFFFFF || dirOffset == 0xFFFFFFFF {
+		if c, d, o, ok := zip64Counts(src, size, eocdAt); ok {
+			count, dirSize, dirOffset = c, d, o
 		}
 	}
-	if count > uint64(limits.maxEntries) || dirSize > uint64(limits.maxEntries)*zipDirBytesPerRec {
+	if count > uint64(limits.maxEntries) {
+		return &Error{Reason: ErrTooManyEntries}
+	}
+	// archive/zip reads records from the directory's start until one is not a record, whatever the end record's count
+	// and size say, so the claim bounds nothing: the records themselves are counted.
+	if countRecords(src, directoryStart(src, eocdAt, dirSize, dirOffset), eocdAt, limits.maxEntries) > limits.maxEntries {
 		return &Error{Reason: ErrTooManyEntries}
 	}
 	return nil
 }
 
+// countRecords counts central-directory records from start, stopping at the end record or once there are more than
+// stopAfter.
+func countRecords(src io.ReaderAt, start, end int64, stopAfter int) int {
+	r := bufio.NewReaderSize(io.NewSectionReader(src, start, end-start), 64<<10)
+	var head [zipMinRecord]byte
+	n := 0
+	for n <= stopAfter {
+		if _, err := io.ReadFull(r, head[:]); err != nil || binary.LittleEndian.Uint32(head[:]) != zipCDSig {
+			break
+		}
+		n++
+		skip := int(binary.LittleEndian.Uint16(head[28:])) + int(binary.LittleEndian.Uint16(head[30:])) + int(binary.LittleEndian.Uint16(head[32:]))
+		if _, err := r.Discard(skip); err != nil {
+			break
+		}
+	}
+	return n
+}
+
+// directoryStart is where archive/zip begins reading central-directory records: the end record's offset shifted by
+// whatever precedes the archive, unless a record sits at the plain offset.
+func directoryStart(src io.ReaderAt, eocdAt int64, dirSize, dirOffset uint64) int64 {
+	start := eocdAt - int64(min(dirSize, math.MaxInt64>>1))
+	off := int64(min(dirOffset, math.MaxInt64>>1))
+	if start < 0 || start > eocdAt {
+		return 0
+	}
+	if start > off {
+		var sig [4]byte
+		if !readFull(src, sig[:], off) && binary.LittleEndian.Uint32(sig[:]) == zipCDSig {
+			return off
+		}
+	}
+	return start
+}
+
 // zip64Counts reads the entry count and directory size from the zip64 end record the locator before the end record
 // at eocdAt points to.
-func zip64Counts(src io.ReaderAt, size, eocdAt int64) (count, dirSize uint64, ok bool) {
+func zip64Counts(src io.ReaderAt, size, eocdAt int64) (count, dirSize, dirOffset uint64, ok bool) {
 	var loc [zip64LocatorSize]byte
 	if eocdAt < zip64LocatorSize || readFull(src, loc[:], eocdAt-zip64LocatorSize) ||
 		binary.LittleEndian.Uint32(loc[:]) != zip64LocatorSig {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	off := int64(min(binary.LittleEndian.Uint64(loc[8:]), math.MaxInt64))
 	if off > size {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	var rec [zip64EOCDMinSize]byte
 	if readFull(src, rec[:], off) || binary.LittleEndian.Uint32(rec[:]) != zip64EOCDSig {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return binary.LittleEndian.Uint64(rec[32:]), binary.LittleEndian.Uint64(rec[40:]), true
+	return binary.LittleEndian.Uint64(rec[32:]), binary.LittleEndian.Uint64(rec[40:]), binary.LittleEndian.Uint64(rec[48:]), true
 }
 
 // readFull reports whether reading len(p) bytes at off failed.
