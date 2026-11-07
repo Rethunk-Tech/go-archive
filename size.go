@@ -2,7 +2,6 @@ package archive
 
 import (
 	"io"
-	"math"
 )
 
 // DeclaredSize sums the uncompressed sizes the archive's headers declare. It
@@ -19,7 +18,7 @@ func DeclaredSize(src Source, size int64) (_ int64, err error) {
 	var total int64
 	// Nothing is opened, so only a solid RAR decodes what it skips; the walk
 	// still runs the 7z header checks and the RAR dictionary cap.
-	limits := walkLimits{budget: math.MaxInt64, over: ErrArchiveTooLarge}
+	limits := Options{}.withDefaults().streamLimits(size)
 	err = walk(src, size, "", limits, func(it item, _ func() (io.ReadCloser, error)) error {
 		total = saturatingAdd(total, it.Size)
 		return nil
