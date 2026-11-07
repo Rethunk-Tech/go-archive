@@ -6,10 +6,15 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-07
+
 ### Fixed
 
 - A zip whose end record understates its central directory no longer slips past the entry cap: the records are counted before `archive/zip` builds them. `DeclaredSize` honours the cap too.
 - The case-collision check folds names as a case-insensitive file system does (ς and σ, ſ and s), not with `strings.ToLower`.
+- `DeclaredSize` bounds the solid RAR entries it skips, so a RAR claiming terabytes is refused.
+- A zip central directory over the cap is refused before it is parsed.
+- `MaxEntries` decides a 7z's entry count.
 
 ## [0.2.0] - 2026-10-29
 
@@ -60,7 +65,8 @@ Notable changes to `go-archive`. The format follows
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
 
-[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rethunk-Tech/go-archive/releases/tag/v0.1.0
