@@ -27,6 +27,28 @@ func WindowsSegment(seg string) bool {
 	return !isDeviceName(stem)
 }
 
+// Clean turns name into one path segment Windows stores as written. Reserved
+// characters become '-', leading and trailing dots and spaces are trimmed, and
+// a device name gets an underscore after its stem ("nul.txt" becomes
+// "nul_.txt"). An empty result is returned as "".
+func Clean(name string) string {
+	name = strings.Trim(strings.Map(func(r rune) rune {
+		if r < ' ' || strings.ContainsRune(windowsUnsafe, r) {
+			return '-'
+		}
+		return r
+	}, name), " .")
+	// The map and trim leave a device name as the only rule a non-empty name can still fail.
+	if name != "" && !WindowsSegment(name) {
+		stem, ext, dot := strings.Cut(name, ".")
+		name = strings.TrimRight(stem, " ") + "_"
+		if dot {
+			name += "." + ext
+		}
+	}
+	return name
+}
+
 // windowsUnsafe are the printable characters Windows refuses in a file name;
 // it refuses the control characters besides.
 const windowsUnsafe = `<>:"/\|?*`

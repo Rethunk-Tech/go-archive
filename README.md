@@ -34,6 +34,7 @@ Rooting, caps, and a worked `Extract` and `Lister` example: [HUMANS.md](HUMANS.m
   non-filesystem sinks. `ExtractReader` extracts RAR and the streams from a plain `io.Reader`.
 - `Extensions`, `HasExtension`, `StripExtension`, `IsStream` and `IsMediaType` name the formats
   by file ending and by `Content-Type`.
+- `Clean` turns any string into a path segment Windows stores as written.
 - `Lister` walks entries forward-only and applies no extraction policy. Decompression is its only
   bound (`ListerOptions.MaxEntryBytes`).
 - The destination must already exist. Writes travel through the caller's `*os.Root`, so no entry

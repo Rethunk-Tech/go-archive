@@ -156,3 +156,24 @@ func TestExtensionTable(t *testing.T) {
 		t.Error("Extensions shares its slice with the caller")
 	}
 }
+
+func TestClean(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"A:B", "A-B"},
+		{"Main?. ", "Main-"},
+		{"NUL", "NUL_"},
+		{"nul.txt", "nul_.txt"},
+		{"com1.tar.gz", "com1_.tar.gz"},
+		{"", ""},
+		{" . ", ""},
+	}
+	for _, c := range cases {
+		got := Clean(c.in)
+		if got != c.want || (got != "" && !WindowsSegment(got)) {
+			t.Errorf("Clean(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

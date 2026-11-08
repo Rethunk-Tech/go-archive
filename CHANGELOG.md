@@ -6,6 +6,10 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `Clean` turns any string into a path segment Windows stores as written.
+
 ## [0.2.2] - 2026-11-07
 
 ### Fixed
