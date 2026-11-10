@@ -734,7 +734,9 @@ func declaredSize(t *testing.T, path string) (int64, error) {
 func tarGzOfZeros(t *testing.T, name string, size int64) string {
 	t.Helper()
 	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	// Zeros compress to a few kilobytes at any level, and the fixtures only need
+	// to be small, so the cheapest level keeps megabytes of encoding out of the suite.
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -831,7 +833,10 @@ func TestTruncatedArchivesFailTyped(t *testing.T) {
 func gzipOfZeros(t *testing.T, name string, n int) string {
 	t.Helper()
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := zw.Write(make([]byte, n)); err != nil {
 		t.Fatal(err)
 	}
