@@ -10,7 +10,7 @@
 run = "GOGC=400 go tool golangci-lint run --allow-parallel-runners ./..."
 
 # govulncheck loads the module's whole symbol graph, and GC at the default GOGC
-# costs it about a quarter of its user time on this module.
+# costs it a large share of its CPU time; a larger heap buys that back.
 [gates.vuln]
 run = "GOGC=400 go tool govulncheck ./..."
 
