@@ -9,8 +9,10 @@
 [gates.lint]
 run = "GOGC=400 go tool golangci-lint run --allow-parallel-runners ./..."
 
+# govulncheck loads the module's whole symbol graph, and GC at the default GOGC
+# costs it about a quarter of its user time on this module.
 [gates.vuln]
-run = "go tool govulncheck ./..."
+run = "GOGC=400 go tool govulncheck ./..."
 
 # No-op in CI, like gitleaks: the pre-push hook already ran this gate on every pushed commit, and a runner's
 # download of the pinned binary fails the whole run whenever GitHub release downloads answer 504.
