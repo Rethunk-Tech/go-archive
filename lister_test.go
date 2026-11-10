@@ -250,8 +250,9 @@ func TestListerListsManyEntriesInsideThePerEntryBound(t *testing.T) {
 	t.Parallel()
 	// Together these are an order of magnitude past the 1 MiB per-entry bound,
 	// while no single entry comes near it, so only an aggregate budget sized from
-	// the per-entry allowance can refuse the archive.
-	const entries, size = 300, 256 << 10
+	// the per-entry allowance can refuse the archive. Sixty-four kilobytes each
+	// already puts the total there; a larger body only copies more bytes.
+	const entries, size = 300, 64 << 10
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	body := bytes.Repeat([]byte("a"), size)
