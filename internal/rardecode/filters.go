@@ -359,10 +359,8 @@ func (f *vmFilter) execute(r map[int]uint32, global, buf []byte, offset int64) (
 	// find program output
 	length := binary.LittleEndian.Uint32(vg[0x1c:]) & vmMask
 	start := binary.LittleEndian.Uint32(vg[0x20:]) & vmMask
-	if start+length > vmSize {
-		// TODO: error
-		start = 0
-		length = 0
+	if uint64(start)+uint64(length) > uint64(vmSize) {
+		return nil, ErrInvalidFilter
 	}
 	if start != 0 && cap(v.m) > cap(buf) {
 		// Initial buffer was to small for vm.
