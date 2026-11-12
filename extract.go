@@ -5,12 +5,14 @@ import (
 	"errors"
 	"hash"
 	"hash/crc32"
+	"hash/maphash"
 	"io"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Rethunk-Tech/go-archive/internal/rardecode"
 )
@@ -21,16 +23,23 @@ type extractor struct {
 	// ratioMax is the most the archive may unpack to for its size.
 	ratioMax int64
 	total    int64
-	seen     map[string]string // lower-cased path -> spelling first used
-	files    map[string]bool
-	sink     func(name string, isDir bool, r io.Reader) error
+	// seen maps a folded prefix's digest to its unfolded digest, so one long
+	// name costs no more than its own length however many prefixes it has.
+	seen      map[uint64]uint64
+	foldSeed  maphash.Seed
+	plainSeed maphash.Seed
+	files     map[string]bool
+	sink      func(name string, isDir bool, r io.Reader) error
 	// wrapSink types the sink's errors, for the root writer whose errors are
 	// filesystem errors; a caller's sink keeps its own.
 	wrapSink bool
 }
 
 func newExtractor(opts Options, size int64, sink func(name string, isDir bool, r io.Reader) error) *extractor {
-	x := &extractor{opts: opts.withDefaults(), seen: map[string]string{}, files: map[string]bool{}, sink: sink}
+	x := &extractor{
+		opts: opts.withDefaults(), seen: map[uint64]uint64{}, files: map[string]bool{}, sink: sink,
+		foldSeed: maphash.MakeSeed(), plainSeed: maphash.MakeSeed(),
+	}
 	x.ratioMax = x.opts.ratioCap(size)
 	return x
 }
@@ -193,13 +202,27 @@ func (x *extractor) admit(name string, isDir bool) (string, error) {
 		return "", &Error{Entry: name, Reason: ErrTooManyEntries}
 	}
 	if !x.opts.CaseSensitive {
-		segs := strings.Split(rel, "/")
-		for i := range segs {
-			p := strings.Join(segs[:i+1], "/")
-			if prev, ok := x.seen[foldKey(p)]; ok && prev != p {
+		// Each prefix is folded once as it is built, so a long name costs its own
+		// length rather than a fresh join per segment.
+		var folded, plain maphash.Hash
+		folded.SetSeed(x.foldSeed)
+		plain.SetSeed(x.plainSeed)
+		var buf []byte
+		for seg := range strings.SplitSeq(rel, "/") {
+			_, _ = folded.WriteString("/")
+			_, _ = plain.WriteString("/")
+			for _, r := range seg {
+				buf = utf8.AppendRune(buf[:0], foldRune(r))
+				_, _ = folded.Write(buf)
+				buf = utf8.AppendRune(buf[:0], r)
+				_, _ = plain.Write(buf)
+			}
+			// A digest collision can only over-report a collision.
+			k, p := folded.Sum64(), plain.Sum64()
+			if prev, ok := x.seen[k]; ok && prev != p {
 				return "", &Error{Entry: name, Reason: ErrCaseCollision}
 			}
-			x.seen[foldKey(p)] = p
+			x.seen[k] = p
 		}
 	}
 	if !isDir {

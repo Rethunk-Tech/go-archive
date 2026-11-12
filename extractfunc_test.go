@@ -1,12 +1,15 @@
 package archive
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"io"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -119,4 +122,36 @@ func TestExtractFuncCaseSensitive(t *testing.T) {
 	twice := buildZip(t, zentry{name: "a/b", body: "1"}, zentry{name: "a/b", body: "2"})
 	err = extractFunc(t, twice, Options{CaseSensitive: true}, collect(map[string]string{}))
 	wantReason(t, err, ErrCaseCollision, "a/b")
+}
+
+// A long name must cost its own length, not one retained string per ancestor prefix.
+func TestExtractFuncLongNameRetainsNoPrefixStrings(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: strings.Repeat("a/", 12000) + "f", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write(nil)
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.Bytes()
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	var live uint64
+	err = ExtractFunc(bytes.NewReader(raw), int64(len(raw)), "deep.zip", Options{}, func(string, bool, io.Reader) error {
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		live = m.HeapAlloc
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grew := int64(live) - int64(before.HeapAlloc); grew > 64<<20 {
+		t.Fatalf("heap grew by %d bytes on a 24 KiB name", grew)
+	}
 }
