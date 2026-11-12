@@ -197,7 +197,7 @@ func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	}
 	// archive/zip reads records from the directory's start until one is not a record, whatever the end record's count
 	// and size say, so the claim bounds nothing: the records themselves are counted.
-	if countRecords(src, directoryStart(src, eocdAt, dirSize, dirOffset), eocdAt, limits.maxEntries) > limits.maxEntries {
+	if countRecords(src, directoryStart(src, size, eocdAt, dirSize, dirOffset), eocdAt, limits.maxEntries) > limits.maxEntries {
 		return &Error{Reason: ErrTooManyEntries}
 	}
 	return nil
@@ -224,19 +224,30 @@ func countRecords(src io.ReaderAt, start, end int64, stopAfter int) int {
 
 // directoryStart is where archive/zip begins reading central-directory records: the end record's offset shifted by
 // whatever precedes the archive, unless a record sits at the plain offset.
-func directoryStart(src io.ReaderAt, eocdAt int64, dirSize, dirOffset uint64) int64 {
+func directoryStart(src io.ReaderAt, size, eocdAt int64, dirSize, dirOffset uint64) int64 {
 	start := eocdAt - int64(min(dirSize, math.MaxInt64>>1))
 	off := int64(min(dirOffset, math.MaxInt64>>1))
 	if start < 0 || start > eocdAt {
 		return 0
 	}
-	if start > off {
-		var sig [4]byte
-		if !readFull(src, sig[:], off) && binary.LittleEndian.Uint32(sig[:]) == zipCDSig {
-			return off
-		}
+	if start > off && isRecord(src, size, off) {
+		return off
 	}
 	return start
+}
+
+// isRecord reports whether a full central-directory record, not just its signature, sits at off. archive/zip reads the
+// whole record there before trusting the offset, so a decoy signature must not redirect the count.
+func isRecord(src io.ReaderAt, size, off int64) bool {
+	if off < 0 || off+zipMinRecord > size {
+		return false
+	}
+	var head [zipMinRecord]byte
+	if readFull(src, head[:], off) || binary.LittleEndian.Uint32(head[:]) != zipCDSig {
+		return false
+	}
+	tail := int64(binary.LittleEndian.Uint16(head[28:])) + int64(binary.LittleEndian.Uint16(head[30:])) + int64(binary.LittleEndian.Uint16(head[32:]))
+	return off+zipMinRecord+tail <= size
 }
 
 // zip64Counts reads the entry count and directory size from the zip64 end record the locator before the end record

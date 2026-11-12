@@ -46,6 +46,30 @@ func TestZipEntryCapHoldsWhenTheEndRecordUnderstatesTheDirectory(t *testing.T) {
 	}
 }
 
+func TestZipPrecheckRejectsADecoyRecord(t *testing.T) {
+	t.Parallel()
+	decoy := make([]byte, zipMinRecord)
+	binary.LittleEndian.PutUint32(decoy, zipCDSig)
+	binary.LittleEndian.PutUint16(decoy[32:], 0xFFFF) // comment runs past the end of the file
+	var raw bytes.Buffer
+	raw.Write(decoy)
+	var records [200 * zipMinRecord]byte
+	for i := 0; i < len(records); i += zipMinRecord {
+		binary.LittleEndian.PutUint32(records[i:], zipCDSig)
+	}
+	raw.Write(records[:])
+	var e [22]byte
+	binary.LittleEndian.PutUint32(e[:], zipEOCDSig)
+	binary.LittleEndian.PutUint16(e[8:], 1)
+	binary.LittleEndian.PutUint16(e[10:], 1)
+	binary.LittleEndian.PutUint32(e[12:], uint32(len(records)))
+	binary.LittleEndian.PutUint32(e[16:], 0)
+	raw.Write(e[:])
+	if err := checkZipDirectory(bytes.NewReader(raw.Bytes()), int64(raw.Len()), walkLimits{maxEntries: 100}); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("precheck got %v, want ErrTooManyEntries", err)
+	}
+}
+
 func TestDeclaredSizeHonoursTheEntryCap(t *testing.T) {
 	t.Parallel()
 	raw := lyingZip(DefaultMaxEntries + 1)
