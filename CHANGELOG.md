@@ -6,6 +6,16 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-12
+
+### Fixed
+
+- A zip whose end record points the central directory at a decoy is refused: a full record has to sit at the offset before it is trusted.
+- A RAR that encrypts its headers returns `ErrEncrypted` instead of a generic format error.
+- RAR5 file hashes (BLAKE2sp) are parsed and checked, so a corrupted entry fails instead of extracting.
+- A RAR VM filter that writes outside its range returns an error.
+- Names that differ only in invalid UTF-8 still collide, and each name prefix is folded into a digest so long paths compare cheaply.
+
 ## [0.3.0] - 2026-11-08
 
 ### Added
@@ -77,7 +87,8 @@ Notable changes to `go-archive`. The format follows
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
 
-[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.0...v0.2.1
