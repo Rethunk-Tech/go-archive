@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -87,6 +88,78 @@ func TestCheckZipDirectorySkipsATrailingDecoyEOCD(t *testing.T) {
 	raw = append(raw, decoy...)
 	if err := checkZipDirectory(bytes.NewReader(raw), int64(len(raw)), walkLimits{maxEntries: 100}); !errors.Is(err, ErrTooManyEntries) {
 		t.Fatalf("precheck got %v, want ErrTooManyEntries", err)
+	}
+}
+
+func v7tar(name, body string) []byte {
+	var hdr [512]byte
+	copy(hdr[:], name)
+	n := len(body)
+	for i := 134; i >= 124; i-- {
+		hdr[i] = '0' + byte(n%8)
+		n /= 8
+	}
+	hdr[156] = '0'
+	var sum int64
+	for i, c := range hdr {
+		if i >= 148 && i < 156 {
+			sum += ' '
+			continue
+		}
+		sum += int64(c)
+	}
+	hdr[154] = 0
+	hdr[155] = ' '
+	for i := 153; i >= 148; i-- {
+		hdr[i] = '0' + byte(sum%8)
+		sum /= 8
+	}
+	out := append(hdr[:], body...)
+	if r := len(body) % 512; r != 0 {
+		out = append(out, make([]byte, 512-r)...)
+	}
+	return append(out, make([]byte, 1024)...)
+}
+
+func TestExtractRecognizesV7Tar(t *testing.T) {
+	t.Parallel()
+	raw := v7tar("hello.txt", "hello")
+	var names []string
+	var body bytes.Buffer
+	err := ExtractFunc(bytes.NewReader(raw), int64(len(raw)), "a.tar", Options{},
+		func(name string, _ bool, r io.Reader) error {
+			names = append(names, name)
+			_, err := body.ReadFrom(r)
+			return err
+		})
+	if err != nil {
+		t.Fatalf("ExtractFunc: %v", err)
+	}
+	if len(names) != 1 || names[0] != "hello.txt" || body.String() != "hello" {
+		t.Fatalf("got names=%v body=%q, want hello.txt / hello", names, body.String())
+	}
+}
+
+func TestExtractRecognizesGzippedV7Tar(t *testing.T) {
+	t.Parallel()
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	_, _ = w.Write(v7tar("hello.txt", "hello"))
+	_ = w.Close()
+	raw := gz.Bytes()
+	var names []string
+	var body bytes.Buffer
+	err := ExtractFunc(bytes.NewReader(raw), int64(len(raw)), "a.tar.gz", Options{},
+		func(name string, _ bool, r io.Reader) error {
+			names = append(names, name)
+			_, err := body.ReadFrom(r)
+			return err
+		})
+	if err != nil {
+		t.Fatalf("ExtractFunc: %v", err)
+	}
+	if len(names) != 1 || names[0] != "hello.txt" || body.String() != "hello" {
+		t.Fatalf("got names=%v body=%q, want hello.txt / hello", names, body.String())
 	}
 }
 

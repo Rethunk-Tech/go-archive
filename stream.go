@@ -72,8 +72,41 @@ func detectStream(head []byte) int {
 	return fmtNone
 }
 
-func isTarHeader(head []byte) bool {
-	return len(head) >= 262 && bytes.Equal(head[257:262], []byte("ustar"))
+func isTarHeader(b []byte) bool {
+	if len(b) < 512 {
+		return false
+	}
+	var unsigned, signed int64
+	for i, c := range b[:512] {
+		if i >= 148 && i < 156 {
+			c = ' '
+		}
+		unsigned += int64(c)
+		signed += int64(int8(c))
+	}
+	n, ok := tarOctal(b[148:156])
+	return ok && (n == unsigned || n == signed)
+}
+
+func tarOctal(b []byte) (int64, bool) {
+	i, j := 0, len(b)
+	for i < j && (b[i] == 0 || b[i] == ' ') {
+		i++
+	}
+	for j > i && (b[j-1] == 0 || b[j-1] == ' ') {
+		j--
+	}
+	if i == j {
+		return 0, true
+	}
+	var n int64
+	for _, c := range b[i:j] {
+		if c < '0' || c > '7' {
+			return 0, false
+		}
+		n = n*8 + int64(c-'0')
+	}
+	return n, true
 }
 
 // emptyTar reports a tar holding no entries: only the end marker of two zero
