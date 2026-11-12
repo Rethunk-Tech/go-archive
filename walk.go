@@ -151,6 +151,21 @@ func walkZip(src io.ReaderAt, size int64, limits walkLimits, fn walkFunc) error 
 	return nil
 }
 
+// findZipEOCD is archive/zip's end-of-directory hunt: a signature whose comment
+// length runs past the tail is a decoy, not the record.
+func findZipEOCD(buf []byte) int {
+	for i := len(buf) - zipEOCDSize; i >= 0; i-- {
+		if binary.LittleEndian.Uint32(buf[i:]) != zipEOCDSig {
+			continue
+		}
+		n := int(binary.LittleEndian.Uint16(buf[i+20:]))
+		if n+zipEOCDSize+i <= len(buf) {
+			return i
+		}
+	}
+	return -1
+}
+
 const (
 	zipEOCDSize      = 22
 	zipEOCDSig       = 0x06054b50
@@ -175,8 +190,8 @@ func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	if _, err := src.ReadAt(buf, size-tail); err != nil && !errors.Is(err, io.EOF) {
 		return nil
 	}
-	i := bytes.LastIndex(buf, []byte{'P', 'K', 5, 6})
-	if i < 0 || len(buf)-i < zipEOCDSize {
+	i := findZipEOCD(buf)
+	if i < 0 {
 		return nil
 	}
 	eocd := buf[i:]

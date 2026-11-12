@@ -78,6 +78,18 @@ func TestDeclaredSizeHonoursTheEntryCap(t *testing.T) {
 	}
 }
 
+func TestCheckZipDirectorySkipsATrailingDecoyEOCD(t *testing.T) {
+	t.Parallel()
+	raw := lyingZip(1000)
+	decoy := make([]byte, zipEOCDSize)
+	binary.LittleEndian.PutUint32(decoy, zipEOCDSig)
+	binary.LittleEndian.PutUint16(decoy[20:], 0xFFFF) // comment length overruns the tail
+	raw = append(raw, decoy...)
+	if err := checkZipDirectory(bytes.NewReader(raw), int64(len(raw)), walkLimits{maxEntries: 100}); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("precheck got %v, want ErrTooManyEntries", err)
+	}
+}
+
 func TestCaseCollisionFoldsAsTheFileSystemDoes(t *testing.T) {
 	t.Parallel()
 	for _, pair := range [][2]string{{"a/ς.txt", "a/σ.txt"}, {"ſ.txt", "s.txt"}, {"µ.txt", "μ.txt"}} {
