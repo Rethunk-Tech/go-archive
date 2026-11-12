@@ -6,13 +6,20 @@
 # through `go tool`, or the checksummed download for actionlint, which is not a
 # module.
 # golangci-lint spends about a third of its CPU in GC at the default GOGC, and a cold gate is CPU-bound.
+# Builds the pinned lint and vuln binaries once, so the gates that need them
+# never race each other's cold `go tool` link.
+[gates.tools]
+run = "go tool -n golangci-lint >/dev/null && go tool -n govulncheck >/dev/null"
+
 [gates.lint]
 run = "GOGC=400 go tool golangci-lint run --allow-parallel-runners ./..."
+needs = ["tools"]
 
 # govulncheck loads the module's whole symbol graph, and GC at the default GOGC
 # costs it a large share of its CPU time; a larger heap buys that back.
 [gates.vuln]
 run = "GOGC=400 go tool govulncheck ./..."
+needs = ["tools"]
 
 # No-op in CI, like gitleaks: the pre-push hook already ran this gate on every pushed commit, and a runner's
 # download of the pinned binary fails the whole run whenever GitHub release downloads answer 504.
@@ -24,6 +31,7 @@ run = '[ -n "$CI" ] || ./scripts/actionlint'
 # than a rewrite: a gate that rewrites the tree passes on a file nobody saw.
 [gates.fmt]
 run = "go tool golangci-lint fmt --diff ./..."
+needs = ["tools"]
 
 # Compiles the tests for Windows. The reserved-name refusal is what the
 # windows-latest job runs; vet cannot.
@@ -32,10 +40,9 @@ run = "GOOS=windows GOARCH=amd64 go vet ./..."
 
 # Linux lint never type-checks a _windows.go file, so a Windows-only test can stop compiling
 # with every other gate green. `go tool -n` names the host binary; GOOS only picks the files.
-# It runs a private copy because a sibling gate's `go tool` can still hold the cached file open
-# for writing on a cold cache, and executing that file then fails with "Text file busy".
 [gates.lint-windows]
-run = 'd=$(mktemp -d) && trap "rm -rf \"$d\"" EXIT && cp "$(go tool -n golangci-lint)" "$d/golangci-lint" && GOGC=400 GOOS=windows "$d/golangci-lint" run --allow-parallel-runners ./...'
+run = 'GOGC=400 GOOS=windows "$(go tool -n golangci-lint)" run --allow-parallel-runners ./...'
+needs = ["tools"]
 
 # No-op in CI, which never uses --no-verify and already scanned every commit on
 # the way in, so a second scan there spends runner minutes to repeat it. The
