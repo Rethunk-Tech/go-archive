@@ -369,6 +369,11 @@ func TestEncryptedRejected(t *testing.T) {
 	_, err := extractDir(t, buildRar(t, rarFile{name: "f", data: "x", encrypted: true}), Options{})
 	wantReason(t, err, ErrEncrypted, "f")
 
+	_, err = extractDir(t, buildRar(t, rarFile{name: "f", data: "x", headerEncrypted: true}), Options{})
+	if !errors.Is(err, ErrEncrypted) {
+		t.Fatalf("header-encrypted rar: got %v, want ErrEncrypted", err)
+	}
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, err := zw.CreateHeader(&zip.FileHeader{Name: "f", Method: zip.Store, Flags: 1})
@@ -498,6 +503,8 @@ type rarFile struct {
 	compressionInfo uint64
 	symlinkTo       string
 	encrypted       bool
+	// headerEncrypted writes the archive's encryption block, which hides every header after it.
+	headerEncrypted bool
 	// declared, when non-zero, is the unpacked size the header claims instead of len(data).
 	declared uint64
 }
@@ -524,6 +531,12 @@ func rarBlock(content []byte, pad ...byte) []byte {
 func buildRar(t *testing.T, files ...rarFile) string {
 	t.Helper()
 	out := []byte("Rar!\x1a\x07\x01\x00")
+	for _, f := range files {
+		if f.headerEncrypted {
+			out = append(out, rarBlock(append(vint(4), vint(0)...), 0)...) // encryption block, flags 0
+			break
+		}
+	}
 	out = append(out, rarBlock(append(vint(1), vint(0)...), 0x80, 0)...) // main header
 	for _, f := range files {
 		var extra []byte

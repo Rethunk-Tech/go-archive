@@ -57,6 +57,8 @@ func wrap(entry string, err error) error {
 	case errors.Is(err, zip.ErrChecksum), errors.Is(err, rardecode.ErrBadFileChecksum), errors.Is(err, gzip.ErrChecksum),
 		errors.Is(err, zstd.ErrCRCMismatch):
 		err = ErrChecksum
+	case errors.Is(err, rardecode.ErrArchiveEncrypted), errors.Is(err, rardecode.ErrArchivedFileEncrypted):
+		err = ErrEncrypted
 	case isReadError && re.Encrypted:
 		err = ErrEncrypted
 	case errors.Is(err, rardecode.ErrSolidOverrun):
