@@ -211,11 +211,12 @@ func (x *extractor) admit(name string, isDir bool) (string, error) {
 		for seg := range strings.SplitSeq(rel, "/") {
 			_, _ = folded.WriteString("/")
 			_, _ = plain.WriteString("/")
+			// The plain side takes the raw bytes: ranging would turn every invalid byte into U+FFFD
+			// and make distinct names look identical.
+			_, _ = plain.WriteString(seg)
 			for _, r := range seg {
 				buf = utf8.AppendRune(buf[:0], foldRune(r))
 				_, _ = folded.Write(buf)
-				buf = utf8.AppendRune(buf[:0], r)
-				_, _ = plain.Write(buf)
 			}
 			// A digest collision can only over-report a collision.
 			k, p := folded.Sum64(), plain.Sum64()

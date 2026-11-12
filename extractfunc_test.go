@@ -155,3 +155,11 @@ func TestExtractFuncLongNameRetainsNoPrefixStrings(t *testing.T) {
 		t.Fatalf("heap grew by %d bytes on a 24 KiB name", live-before.HeapAlloc)
 	}
 }
+
+// Distinct invalid-UTF-8 names fold to the same key, so they must still be reported as colliding.
+func TestExtractFuncInvalidUTF8NamesCollide(t *testing.T) {
+	t.Parallel()
+	zip := buildZip(t, zentry{name: "\x91", body: "1"}, zentry{name: "\xfd", body: "2"})
+	err := extractFunc(t, zip, Options{}, collect(map[string]string{}))
+	wantReason(t, err, ErrCaseCollision, "\ufffd")
+}
