@@ -64,6 +64,9 @@ const (
 	file5ExtraRedirect = 5
 	file5ExtraOwner    = 6
 
+	// file hash extra types (RAR 5.0 technote)
+	file5HashBlake2sp = 0
+
 	// file encryption record flags
 	file5ExtraCryptCheckPresent = 0x0001 // password check data is present
 	file5ExtraCryptUseMac       = 0x0002 // use MAC instead of plain checksum
@@ -231,6 +234,23 @@ func (a *archive50) getKeys(kdfCount int, salt, check []byte) ([][]byte, error) 
 		return nil, ErrBadPassword
 	}
 	return keys, nil
+}
+
+// parseFileHashRecord reads a RAR5 file-hash extra record. Type 0 is BLAKE2sp-256;
+// the digest is verified against extracted bytes through the same hash hook as CRC32.
+func parseFileHashRecord(b *readBuf, f *fileBlockHeader) error {
+	htype := b.uvarint()
+	if htype != file5HashBlake2sp {
+		return nil
+	}
+	if len(*b) < blake2spSize {
+		return ErrCorruptFileHeader
+	}
+	f.sum = slices.Clone(b.bytes(blake2spSize))
+	if f.first {
+		f.hash = newBlake2sp
+	}
+	return nil
 }
 
 // parseFileEncryptionRecord processes the optional file encryption record from a file header.
@@ -473,7 +493,7 @@ func (a *archive50) parseFileHeader(h *blockHeader50) (*fileBlockHeader, error) 
 				f.errs = append(f.errs, encErr)
 			}
 		case file5ExtraHash:
-			// TODO: hash
+			err = parseFileHashRecord(&e.data, f)
 		case file5ExtraTime:
 			err = parseFilePrecisionTimeRecord(&e.data, f)
 		case file5ExtraVersion:
