@@ -151,7 +151,7 @@ func TestExtractFuncLongNameRetainsNoPrefixStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grew := int64(live) - int64(before.HeapAlloc); grew > 64<<20 {
-		t.Fatalf("heap grew by %d bytes on a 24 KiB name", grew)
+	if live > before.HeapAlloc && live-before.HeapAlloc > 64<<20 {
+		t.Fatalf("heap grew by %d bytes on a 24 KiB name", live-before.HeapAlloc)
 	}
 }
