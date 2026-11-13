@@ -924,3 +924,15 @@ func TestEmptyTarIsAnArchiveWithNoEntries(t *testing.T) {
 	_, err = extractDir(t, writeTemp(t, "short.tar", make([]byte, 512)), Options{})
 	wantReason(t, err, ErrUnsupportedFormat, "")
 }
+
+// An entry cap of 1<<54 makes entries*tarOverhead wrap to the most negative int64.
+func TestHugeEntryCapDoesNotShrinkTheStreamBudget(t *testing.T) {
+	t.Parallel()
+	if got := streamBudget(1<<30, 1<<54); got < 1<<30 {
+		t.Fatalf("streamBudget = %d, below its payload", got)
+	}
+	_, err := extractDir(t, filepath.Join("testdata", "bare.txt.gz"), Options{MaxEntries: 1 << 54})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
