@@ -391,3 +391,50 @@ func FuzzExtractReader(f *testing.F) {
 		checkExtracted(t, parent, dest)
 	})
 }
+
+// FuzzExtractReaderBytes feeds raw bytes, seeded with every fixture, through ExtractReader's forward-only path, which
+// detects and decodes without the random access FuzzExtract's readers lean on.
+func FuzzExtractReaderBytes(f *testing.F) {
+	seeds, _ := filepath.Glob("testdata/*")
+	for _, p := range seeds {
+		if b, err := os.ReadFile(p); err == nil {
+			f.Add(b)
+		}
+	}
+	f.Fuzz(func(t *testing.T, archive []byte) {
+		parent := t.TempDir()
+		dest := filepath.Join(parent, "dest")
+		for _, d := range []string{dest, filepath.Join(parent, "sentinel")} {
+			if err := os.Mkdir(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		root, err := os.OpenRoot(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = ExtractReader(bytes.NewReader(archive), "item", root, fuzzOptions)
+		_ = root.Close()
+		checkExtracted(t, parent, dest)
+	})
+}
+
+// FuzzClean asserts Clean's promise: the result is empty or one segment Windows stores as written, and cleaning it
+// again changes nothing.
+func FuzzClean(f *testing.F) {
+	for _, s := range []string{"nul.txt", "CON", " a. ", "a:b", "x\x00y", "com1 .txt", "...", "ｆｕｌｌ"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		got := Clean(name)
+		if got == "" {
+			return
+		}
+		if !WindowsSegment(got) {
+			t.Fatalf("Clean(%q) = %q, which Windows would alter", name, got)
+		}
+		if again := Clean(got); again != got {
+			t.Fatalf("Clean is not idempotent: %q -> %q -> %q", name, got, again)
+		}
+	})
+}
