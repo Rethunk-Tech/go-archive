@@ -936,3 +936,26 @@ func TestHugeEntryCapDoesNotShrinkTheStreamBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Hostile names must be refused in every container, not only zip and rar.
+func TestUnsafeNamesRefusedInTar(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"../x", "a/../../x", "/abs", `..\x`, `\\server\share\x`, "a::$DATA", "COM¹", "a/NUL.txt", "a."} {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 1, Mode: 0o644, Format: tar.FormatPAX}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte("x"))
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dest, err := extractDir(t, writeTemp(t, "h.tar", buf.Bytes()), Options{})
+		if err == nil {
+			t.Errorf("tar name %q accepted", name)
+		}
+		if ents, _ := os.ReadDir(dest); len(ents) != 0 {
+			t.Errorf("tar name %q wrote %d entries", name, len(ents))
+		}
+	}
+}
