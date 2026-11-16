@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -778,6 +779,44 @@ func TestRatioGuardStopsASkippedStreamEntry(t *testing.T) {
 	wantReason(t, err, ErrRatio, "")
 }
 
+// The framing allowance a tar draws on must be spent per header read, not
+// granted up front for the entry cap: with the default cap of 20000, a granted
+// 20000 headers would decompress 30 MiB of skipped body past any tight total or
+// ratio cap. Only the headers the archive actually holds may be charged.
+func TestSkippedStreamEntryIsHeldToTheCapAtTheDefaultEntryCap(t *testing.T) {
+	t.Parallel()
+	src := tarGzOfZeros(t, ".", 5<<20)
+	_, err := extractDir(t, src, Options{MaxTotalBytes: 100000})
+	wantReason(t, err, ErrArchiveTooLarge, "")
+	// The same archive under a tight ratio guard fails as a ratio breach.
+	_, err = extractDir(t, src, Options{MaxRatio: 1, RatioFloor: 1 << 20})
+	wantReason(t, err, ErrRatio, "")
+}
+
+// A tar's headers are still granted as they are read, so many entries extract
+// even when the payload allowance alone is far below the framing around them.
+func TestManyTarHeadersStillExtractUnderATightCap(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for i := range 4000 {
+		name := "d" + strconv.Itoa(i)
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The headers alone are 2 MiB, above the 1 MiB peek and the 4 KiB payload
+	// allowance together, so they only fit if each is granted as it is read.
+	_, err := extractDir(t, writeTemp(t, "many.tar", buf.Bytes()),
+		Options{MaxTotalBytes: 4096, MaxRatio: 1, RatioFloor: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Caps set to the largest int64 mean unlimited, not an empty file.
 func TestMaxInt64CapsStillWriteTheEntry(t *testing.T) {
 	t.Parallel()
@@ -928,8 +967,11 @@ func TestEmptyTarIsAnArchiveWithNoEntries(t *testing.T) {
 // An entry cap of 1<<54 makes entries*tarOverhead wrap to the most negative int64.
 func TestHugeEntryCapDoesNotShrinkTheStreamBudget(t *testing.T) {
 	t.Parallel()
-	if got := streamBudget(1<<30, 1<<54); got < 1<<30 {
+	if got := streamBudget(1 << 30); got < 1<<30 {
 		t.Fatalf("streamBudget = %d, below its payload", got)
+	}
+	if got := headerAllowance(1 << 54); got < 0 {
+		t.Fatalf("headerAllowance = %d, below zero", got)
 	}
 	_, err := extractDir(t, filepath.Join("testdata", "bare.txt.gz"), Options{MaxEntries: 1 << 54})
 	if err != nil {

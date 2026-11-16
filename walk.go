@@ -40,6 +40,9 @@ type walkLimits struct {
 	budget     int64
 	over       error
 	maxEntries int
+	// headers is the tar framing a stream may add to budget, spent a header at a
+	// time as the walk reads them rather than granted up front.
+	headers int64
 }
 
 // errWalkStop ends a walk with no error, for a caller that already has what it
@@ -481,6 +484,9 @@ func walkStream(src io.Reader, kind int, baseName string, limits walkLimits, fn 
 	}
 	tr := tar.NewReader(p.r)
 	for {
+		// The header the reader is about to consume is not payload, so it is
+		// granted as it is read instead of being reserved for a full entry cap.
+		p.grantHeader()
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			return nil

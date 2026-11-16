@@ -446,12 +446,16 @@ func TestListerOpenAfterAFailedNextRefuses(t *testing.T) {
 }
 
 // A skipped stream entry is decompressed too, so a listing keeps the ratio bound
-// rather than reading a small file's bomb up to the total cap.
+// rather than reading a small file's bomb up to the total cap. The tar framing
+// is an allowance spent as headers are read, not part of the base budget.
 func TestListerKeepsTheRatioBound(t *testing.T) {
 	t.Parallel()
 	limits := Options{}.withDefaults().streamLimits(1 << 20)
-	if limits.budget > streamBudget(DefaultRatioFloor, DefaultMaxEntries) || !errors.Is(limits.over, ErrRatio) {
+	if limits.budget != streamBudget(DefaultRatioFloor) || !errors.Is(limits.over, ErrRatio) {
 		t.Fatalf("listing limits for a 1 MiB source = %+v", limits)
+	}
+	if limits.headers != headerAllowance(DefaultMaxEntries) {
+		t.Fatalf("headers = %d, want the entry cap's %d", limits.headers, headerAllowance(DefaultMaxEntries))
 	}
 }
 

@@ -80,7 +80,7 @@ func (o Options) streamLimits(srcSize int64) walkLimits {
 	if limit < o.MaxTotalBytes {
 		over = ErrRatio
 	}
-	return walkLimits{budget: streamBudget(limit, o.MaxEntries), over: over}
+	return walkLimits{budget: streamBudget(limit), over: over, headers: headerAllowance(o.MaxEntries)}
 }
 
 func (o Options) withDefaults() Options {
