@@ -223,29 +223,31 @@ func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	}
 	// archive/zip reads records from the directory's start until one is not a record, whatever the end record's count
 	// and size say, so the claim bounds nothing: the records themselves are counted.
-	if countRecords(src, directoryStart(src, size, eocdAt, dirSize, dirOffset), eocdAt, limits.maxEntries) > limits.maxEntries {
+	n, bytes := countRecords(src, directoryStart(src, size, eocdAt, dirSize, dirOffset), eocdAt, limits.maxEntries)
+	if n > limits.maxEntries || (limits.maxEntries <= math.MaxInt64/zipDirPerEntry && bytes > int64(limits.maxEntries)*zipDirPerEntry) {
 		return &Error{Reason: ErrTooManyEntries}
 	}
 	return nil
 }
 
 // countRecords counts central-directory records from start, stopping at the end record or once there are more than
-// stopAfter.
-func countRecords(src io.ReaderAt, start, end int64, stopAfter int) int {
+// stopAfter, and returns the bytes they span. The end record's declared size is attacker-chosen, so only the
+// records themselves bound what archive/zip reads.
+func countRecords(src io.ReaderAt, start, end int64, stopAfter int) (n int, total int64) {
 	r := bufio.NewReaderSize(io.NewSectionReader(src, start, end-start), 64<<10)
 	var head [zipMinRecord]byte
-	n := 0
 	for n <= stopAfter {
 		if _, err := io.ReadFull(r, head[:]); err != nil || binary.LittleEndian.Uint32(head[:]) != zipCDSig {
 			break
 		}
 		n++
 		skip := int(binary.LittleEndian.Uint16(head[28:])) + int(binary.LittleEndian.Uint16(head[30:])) + int(binary.LittleEndian.Uint16(head[32:]))
+		total += zipMinRecord + int64(skip)
 		if _, err := r.Discard(skip); err != nil {
 			break
 		}
 	}
-	return n
+	return n, total
 }
 
 // directoryStart is where archive/zip begins reading central-directory records: the end record's offset shifted by

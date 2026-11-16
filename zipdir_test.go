@@ -256,3 +256,13 @@ func TestCaseCollisionFoldsAsTheFileSystemDoes(t *testing.T) {
 		}
 	}
 }
+
+// The end record's directory size is the writer's claim; the records archive/zip reads are what cost memory.
+func TestZipDirectoryBoundIgnoresALyingDirectorySize(t *testing.T) {
+	t.Parallel()
+	raw := paddedZip(t)
+	binary.LittleEndian.PutUint32(raw[len(raw)-zipEOCDSize+12:], 0)
+	if err := checkZipDirectory(bytes.NewReader(raw), int64(len(raw)), walkLimits{maxEntries: 4}); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("got %v, want ErrTooManyEntries", err)
+	}
+}
