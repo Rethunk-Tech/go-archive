@@ -179,11 +179,13 @@ const (
 	zipMaxComment    = 1<<16 - 1
 	zipMinRecord     = 46 // fixed part of a central-directory record
 	zipCDSig         = 0x02014b50
+	zipDirPerEntry   = 1 << 10 // extra field and comment bytes a record may spend per declared entry
 )
 
 // checkZipDirectory refuses a zip whose end-of-central-directory record declares more entries than the entry cap allows,
-// or whose directory spans more bytes than that many records could fill. archive/zip builds every record in memory before a caller can count them, so
-// the check has to come first. Anything it cannot read is left for zip.NewReader to refuse.
+// a directory larger than 1 KiB per declared entry, or whose directory spans more bytes than that many records could
+// fill. archive/zip builds every record in memory before a caller can count them, so the check has to come first.
+// Anything it cannot read is left for zip.NewReader to refuse.
 func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 	if limits.maxEntries <= 0 || size < zipEOCDSize {
 		return nil
@@ -211,6 +213,12 @@ func checkZipDirectory(src io.ReaderAt, size int64, limits walkLimits) error {
 		}
 	}
 	if count > uint64(limits.maxEntries) {
+		return &Error{Reason: ErrTooManyEntries}
+	}
+	// archive/zip allocates the directory the end record sizes before a caller sees a record, so that size is the
+	// allocation. One record may legitimately carry a 64 KiB name plus its extra field and comment, so the allowance is
+	// per allowed entry; the product is guarded in case a caller sets MaxEntries near MaxInt64.
+	if limits.maxEntries <= math.MaxInt64/zipDirPerEntry && declared(dirSize) > int64(limits.maxEntries)*zipDirPerEntry {
 		return &Error{Reason: ErrTooManyEntries}
 	}
 	// archive/zip reads records from the directory's start until one is not a record, whatever the end record's count

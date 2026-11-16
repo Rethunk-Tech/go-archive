@@ -1,11 +1,14 @@
 package archive
 
 import (
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"io"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +91,84 @@ func TestCheckZipDirectorySkipsATrailingDecoyEOCD(t *testing.T) {
 	raw = append(raw, decoy...)
 	if err := checkZipDirectory(bytes.NewReader(raw), int64(len(raw)), walkLimits{maxEntries: 100}); !errors.Is(err, ErrTooManyEntries) {
 		t.Fatalf("precheck got %v, want ErrTooManyEntries", err)
+	}
+}
+
+// paddedZip is a two-entry zip whose central records each carry a 2 KiB extra field and a 1 KiB comment, so its end
+// record declares a directory of about 6 KiB while the record count stays at two.
+func paddedZip(t *testing.T) []byte {
+	t.Helper()
+	const pad = 2048
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, name := range []string{"a", "b"} {
+		// An extra field of an unassigned header ID: a reader skips it rather than failing on it.
+		extra := make([]byte, 4+pad)
+		binary.LittleEndian.PutUint16(extra, 0x9999)
+		binary.LittleEndian.PutUint16(extra[2:], pad)
+		w, err := zw.CreateHeader(&zip.FileHeader{
+			Name: name, Method: zip.Store, Extra: extra, Comment: strings.Repeat("c", pad/2),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+// The cap is per allowed entry, so a two-entry archive whose directory outgrows 1 KiB times the cap is refused even
+// though its record count is fine.
+func TestZipDirectoryOverOneKiBPerAllowedEntryIsRefused(t *testing.T) {
+	t.Parallel()
+	raw := paddedZip(t)
+	size := int64(len(raw))
+	// Refused before archive/zip builds a record, so the precheck alone must answer.
+	if err := checkZipDirectory(bytes.NewReader(raw), size, walkLimits{maxEntries: 4}); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("precheck got %v, want ErrTooManyEntries", err)
+	}
+	if err := ExtractFunc(bytes.NewReader(raw), size, "x.zip", Options{MaxEntries: 4}, func(string, bool, io.Reader) error { return nil }); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("ExtractFunc got %v, want ErrTooManyEntries", err)
+	}
+	l, err := NewLister(bytes.NewReader(raw), size, "x.zip", ListerOptions{MaxEntries: 4})
+	if err == nil {
+		_, err = l.Next()
+		_ = l.Close()
+	}
+	if !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("Lister got %v, want ErrTooManyEntries", err)
+	}
+	dest := t.TempDir()
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := Extract(bytes.NewReader(raw), size, "x.zip", root, Options{MaxEntries: 4}); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("Extract got %v, want ErrTooManyEntries", err)
+	}
+	if ents, readErr := os.ReadDir(dest); readErr != nil {
+		t.Fatal(readErr)
+	} else if len(ents) != 0 {
+		t.Fatalf("refused archive still wrote %d entries", len(ents))
+	}
+}
+
+func TestZipWithinTheDirectoryBoundIsRead(t *testing.T) {
+	t.Parallel()
+	dest, err := extractDir(t, buildZip(t, zentry{name: "a", body: "1"}, zentry{name: "b", body: "2"}), Options{MaxEntries: 4})
+	if err != nil {
+		t.Fatalf("normal zip refused: %v", err)
+	}
+	if ents, readErr := os.ReadDir(dest); readErr != nil {
+		t.Fatal(readErr)
+	} else if len(ents) != 2 {
+		t.Fatalf("wrote %d entries, want 2", len(ents))
 	}
 }
 
