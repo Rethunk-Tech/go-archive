@@ -66,7 +66,7 @@ for {
 | `Extract` on failure | stops at the first error and leaves the partial tree, so pass a throwaway directory and discard it |
 | `baseName` | names the file a bare stream yields: the whole name less one trailing stream suffix (`.gz`, `.xz`, `.zst`, `.lzma`, `.bz2`, `.lz4`), matched case-insensitively; formats carrying their own names ignore it |
 | An empty tar | 1,024 zero bytes read as a tar with no entries only when `baseName` has a tar ending (`.tar`, `.tar.*`, `.tgz`, `.txz`, `.tzst`, `.tbz2`, `.tbz`); under any other name they are refused, since zeros are otherwise a valid stream payload |
-| `Lister` refuses | only what no reader can open safely: a 7z whose headers name more than `DefaultMaxEntries` entries, a decoder over 256 MiB, or an encrypted header; `Open` refuses an encrypted entry; entry counts and name acceptability are otherwise the caller's |
+| `Lister` refuses | only what no reader can open safely: a 7z whose headers name more than `DefaultMaxEntries` entries, a decoder over 256 MiB, an encrypted header, or a zip declaring more than `ListerOptions.MaxEntries` entries; `Open` refuses an encrypted entry; name acceptability is otherwise the caller's |
 | `Lister`'s bounds | `ListerOptions.MaxEntryBytes` on what `Open` hands out, and `Extract`'s default stream budget with its ratio, because a stream, and a solid 7z or RAR reaching a later entry, decompresses what the caller skips |
 | The walk | forward-only, because the formats are; `Open` is valid only until the next `Next` |
 | `Close` | idempotent, and never closes the `Source` you passed in; every read is at an offset, so its position never moves |
