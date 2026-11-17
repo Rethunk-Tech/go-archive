@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,6 +436,136 @@ func FuzzClean(f *testing.F) {
 		}
 		if again := Clean(got); again != got {
 			t.Fatalf("Clean is not idempotent: %q -> %q -> %q", name, got, again)
+		}
+	})
+}
+
+// FuzzWindowsSegment checks the documented Windows name rules: a segment the
+// predicate accepts is already a Clean name, with no reserved character.
+func FuzzWindowsSegment(f *testing.F) {
+	for _, s := range []string{
+		"a.txt", "Mod", "run.sh", "com10.txt", "lpt10", "CONSOLE", "com1x", "null",
+		"lpt0", "COM0.txt", "CON", "con.txt", "NUL.tar.gz", "CONIN$", "a:b", `a\b`,
+		"foo.", "foo ", "", "a\tb", "a\x00b", "ファイル.txt", "a b",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, seg string) {
+		if !WindowsSegment(seg) {
+			return
+		}
+		if seg == "" || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+			t.Fatalf("accepted a name Windows would alter: %q", seg)
+		}
+		if strings.ContainsAny(seg, `<>:"/\|?*`) {
+			t.Fatalf("accepted a reserved character in %q", seg)
+		}
+		for _, r := range seg {
+			if r < ' ' {
+				t.Fatalf("accepted a control character in %q", seg)
+			}
+		}
+		if got := Clean(seg); got != seg {
+			t.Fatalf("WindowsSegment accepted %q, but Clean rewrote it to %q", seg, got)
+		}
+	})
+}
+
+// FuzzExtension checks HasExtension, StripExtension and IsStream against the
+// exported ending table: a hit is the longest match, a stream is a bare suffix,
+// and a miss leaves the name unchanged.
+func FuzzExtension(f *testing.F) {
+	for _, s := range []string{
+		"a.tar.lz4", "B.LZ4", "m.tar.gz", "M.TGZ", "notes.txt.gz", "x.tbz",
+		"pack.zip", "readme.txt", "", "file.ZIP", "a.TAR.GZ", "x.tgz.bak",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		has := HasExtension(name)
+		stem := StripExtension(name)
+		stream := IsStream(name)
+		exts := Extensions()
+		lower := strings.ToLower(name)
+		longest := ""
+		for _, ext := range exts {
+			if strings.HasSuffix(lower, ext) && len(ext) > len(longest) {
+				longest = ext
+			}
+		}
+		if has != (longest != "") {
+			t.Fatalf("HasExtension(%q) = %v, table match %q", name, has, longest)
+		}
+		if has {
+			want := name[:len(name)-len(longest)]
+			if stem != want {
+				t.Fatalf("StripExtension(%q) = %q, want %q", name, stem, want)
+			}
+		} else if stem != name {
+			t.Fatalf("StripExtension(%q) = %q, want the name unchanged", name, stem)
+		}
+		bare := longest == ".gz" || longest == ".xz" || longest == ".zst" ||
+			longest == ".lzma" || longest == ".bz2" || longest == ".lz4"
+		if stream != bare {
+			t.Fatalf("IsStream(%q) = %v, matched %q", name, stream, longest)
+		}
+	})
+}
+
+// FuzzIsMediaType checks that a parse failure is never accepted, that
+// parameters and case do not change the answer, and that octet-stream is not one.
+func FuzzIsMediaType(f *testing.F) {
+	for _, s := range []string{
+		"application/zip", "Application/Zip; charset=binary", "application/x-gtar",
+		"application/x-compressed-tar", "application/x-bzip1-compressed-tar",
+		"application/x-lz4", "application/x-rar", "application/octet-stream",
+		"text/plain", "", "not a type;;",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, contentType string) {
+		got := IsMediaType(contentType)
+		mt, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			if got {
+				t.Fatalf("accepted unparseable %q", contentType)
+			}
+			return
+		}
+		if IsMediaType(mt) != got {
+			t.Fatalf("IsMediaType(%q) = %v, IsMediaType(%q) = %v", contentType, got, mt, IsMediaType(mt))
+		}
+		if got && mt == "application/octet-stream" {
+			t.Fatal("octet-stream is not a known archive type")
+		}
+	})
+}
+
+// FuzzDeclaredSize seeds every fixture and checks that a successful size is
+// never negative, and that a listing of the same bytes does not exceed it.
+func FuzzDeclaredSize(f *testing.F) {
+	seeds, _ := filepath.Glob("testdata/*")
+	for _, p := range seeds {
+		if b, err := os.ReadFile(p); err == nil {
+			f.Add(b)
+		}
+	}
+	f.Fuzz(func(t *testing.T, archive []byte) {
+		src := writeTemp(t, "sized", archive)
+		in, size := openSized(t, src)
+		n, err := DeclaredSize(in, size)
+		if err != nil {
+			return
+		}
+		if n < 0 {
+			t.Fatalf("DeclaredSize = %d", n)
+		}
+		listed, _, listErr := listByEntries(t, src)
+		if listErr != nil {
+			return
+		}
+		if listed > n {
+			t.Fatalf("listing totalled %d bytes, declared size is %d", listed, n)
 		}
 	})
 }
