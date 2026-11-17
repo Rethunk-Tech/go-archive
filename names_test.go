@@ -26,8 +26,9 @@ func TestWindowsSegment(t *testing.T) {
 		// Windows drops a trailing dot or space, so the stored name would differ.
 		"foo.": false, "foo ": false, ".": false, "..": false,
 
-		// Control characters, and the empty segment.
+		// Control characters, invalid UTF-8, and the empty segment.
 		"": false, "a\tb": false, "a\nb": false, "a\x00b": false, "a\x1fb": false,
+		"\x95": false,
 	}
 	for seg, want := range cases {
 		if got := WindowsSegment(seg); got != want {

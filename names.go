@@ -15,7 +15,8 @@ import (
 // windowsUnsafe as separators or invalid, and hands a device name to any file
 // whose stem matches one.
 func WindowsSegment(seg string) bool {
-	if seg == "" || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+	// Ranging an invalid UTF-8 string yields U+FFFD, which is a different name.
+	if seg == "" || !utf8.ValidString(seg) || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
 		return false
 	}
 	for _, r := range seg {
