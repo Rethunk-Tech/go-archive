@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func FuzzCleanName(f *testing.F) {
@@ -440,19 +441,23 @@ func FuzzClean(f *testing.F) {
 	})
 }
 
-// FuzzWindowsSegment checks the documented Windows name rules: a segment the
-// predicate accepts is already a Clean name, with no reserved character.
+// FuzzWindowsSegment checks the documented Windows name rules. Clean also
+// trims a leading dot or space, which Windows keeps, so acceptance is not
+// identity with Clean.
 func FuzzWindowsSegment(f *testing.F) {
 	for _, s := range []string{
 		"a.txt", "Mod", "run.sh", "com10.txt", "lpt10", "CONSOLE", "com1x", "null",
 		"lpt0", "COM0.txt", "CON", "con.txt", "NUL.tar.gz", "CONIN$", "a:b", `a\b`,
-		"foo.", "foo ", "", "a\tb", "a\x00b", "ファイル.txt", "a b",
+		"foo.", "foo ", " 0", "", "a\tb", "a\x00b", "\x95", "ファイル.txt", "a b",
 	} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, seg string) {
 		if !WindowsSegment(seg) {
 			return
+		}
+		if !utf8.ValidString(seg) {
+			t.Fatalf("accepted invalid UTF-8 %q", seg)
 		}
 		if seg == "" || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
 			t.Fatalf("accepted a name Windows would alter: %q", seg)
@@ -464,9 +469,6 @@ func FuzzWindowsSegment(f *testing.F) {
 			if r < ' ' {
 				t.Fatalf("accepted a control character in %q", seg)
 			}
-		}
-		if got := Clean(seg); got != seg {
-			t.Fatalf("WindowsSegment accepted %q, but Clean rewrote it to %q", seg, got)
 		}
 	})
 }
