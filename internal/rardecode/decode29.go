@@ -216,11 +216,16 @@ func (d *decoder29) readBlockHeader() error {
 			err = d.lz.init(d.br)
 		}
 	}
-	if err == io.EOF {
-		err = ErrDecoderOutOfData
+	if err != nil {
+		// The header was not decoded, so leave hdrRead unset. Otherwise the
+		// next fill would skip the header and use a decoder that init never ran.
+		if err == io.EOF {
+			err = ErrDecoderOutOfData
+		}
+		return err
 	}
 	d.hdrRead = true
-	return err
+	return nil
 }
 
 func (d *decoder29) fill(dr *decodeReader) error {
