@@ -104,6 +104,9 @@ func (r *rangeCoder) init(br io.ByteReader) error {
 
 func (r *rangeCoder) currentCount(scale uint32) uint32 {
 	r.rnge /= scale
+	if r.rnge == 0 {
+		return ^uint32(0) // corrupt stream: callers treat count >= scale as an error
+	}
 	return (r.code - r.low) / r.rnge
 }
 
@@ -774,17 +777,23 @@ func (m *model) makeEscFreq(c context, numMasked int) *see2Context {
 }
 
 func (m *model) decodeSymbol2(c context, numMasked int) (*state, error) {
+	states := m.a.contextStates(c)
+	n := len(states) - numMasked
+	if n <= 0 || n > len(m.ibuf) {
+		return nil, ErrCorruptPPM
+	}
 	see := m.makeEscFreq(c, numMasked)
 	scale := see.mean()
 
 	var i int
 	var hi uint32
-	states := m.a.contextStates(c)
-	n := len(states) - numMasked
 	sl := m.ibuf[:n]
 	for j := range sl {
-		for m.charMask[states[i].sym] == m.escCount {
+		for i < len(states) && m.charMask[states[i].sym] == m.escCount {
 			i++
+		}
+		if i >= len(states) {
+			return nil, ErrCorruptPPM
 		}
 		hi += uint32(states[i].freq)
 		sl[j] = i
@@ -1019,7 +1028,19 @@ func (m *model) update(minC, maxC context, s *state) context {
 	return newC
 }
 
-func (m *model) ReadByte() (byte, error) {
+// ReadByte decodes one byte. The arena-backed model indexes with
+// stream-derived values, so a corrupt stream can drive it out of bounds;
+// that is reported as ErrCorruptPPM instead of crashing the caller.
+func (m *model) ReadByte() (b byte, err error) {
+	defer func() {
+		if recover() != nil {
+			b, err = 0, ErrCorruptPPM
+		}
+	}()
+	return m.readByte()
+}
+
+func (m *model) readByte() (byte, error) {
 	if m.c == 0 {
 		m.restart()
 	}

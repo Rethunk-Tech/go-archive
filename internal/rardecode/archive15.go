@@ -76,6 +76,9 @@ func (h *blockHeader15) checkCRC() error {
 		}
 		data = data[:6]
 	case blockOldService:
+		if len(data) < 2 {
+			return ErrCorruptBlockHeader
+		}
 		if data.uint16() == subtypeUnixOwner {
 			return nil
 		}
