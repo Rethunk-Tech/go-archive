@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"runtime"
+	"strings"
 )
 
 const (
@@ -553,6 +555,7 @@ type model struct {
 	prevSuccess byte
 	escCount    byte
 	prevSym     byte
+	corrupt     bool // set by update when the stream names a symbol its context lacks
 	initEsc     byte
 	c           context
 	rc          rangeCoder
@@ -918,6 +921,10 @@ func (m *model) update(minC, maxC context, s *state) context {
 		if len(states) > 1 {
 			for states[i].sym != s.sym {
 				i++
+				if i == len(states) {
+					m.corrupt = true
+					return 0
+				}
 			}
 			if i > 0 && states[i].freq >= states[i-1].freq {
 				states[i-1], states[i] = states[i], states[i-1]
@@ -1029,12 +1036,21 @@ func (m *model) update(minC, maxC context, s *state) context {
 }
 
 // ReadByte decodes one byte. The arena-backed model indexes with
-// stream-derived values, so a corrupt stream can drive it out of bounds;
-// that is reported as ErrCorruptPPM instead of crashing the caller.
+// stream-derived values in too many places to bound each one, so a corrupt
+// stream can drive it out of range; only index and slice-bounds panics are
+// reported as ErrCorruptPPM, any other panic is a bug and propagates.
 func (m *model) ReadByte() (b byte, err error) {
 	defer func() {
-		if recover() != nil {
-			b, err = 0, ErrCorruptPPM
+		if r := recover(); r != nil {
+			if e, ok := r.(runtime.Error); ok {
+				msg := e.Error()
+				if strings.HasPrefix(msg, "runtime error: index out of range") ||
+					strings.HasPrefix(msg, "runtime error: slice bounds out of range") {
+					b, err = 0, ErrCorruptPPM
+					return
+				}
+			}
+			panic(r)
 		}
 	}()
 	return m.readByte()
@@ -1069,6 +1085,10 @@ func (m *model) readByte() (byte, error) {
 	}
 
 	m.c = m.update(minC, maxC, s)
+	if m.corrupt {
+		m.corrupt = false
+		return 0, ErrCorruptPPM
+	}
 	m.prevSym = s.sym
 	return s.sym, nil
 }
