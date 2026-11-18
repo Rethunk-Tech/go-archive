@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ulikunitz/xz/lzma"
 )
 
 // sevenZipNum encodes v as a 7z number: the extra bytes are little-endian and
@@ -329,4 +331,227 @@ func TestSevenZipTruncatedHeaderStaysMalformed(t *testing.T) {
 			t.Fatalf("limit %d: got %v, want ErrMalformed", limit, err)
 		}
 	}
+}
+
+func TestASevenZipStartRecordMustHoldTheNextHeader(t *testing.T) {
+	t.Parallel()
+	start := append([]byte("7z\xbc\xaf\x27\x1c\x00\x04"), make([]byte, 24)...)
+	binary.LittleEndian.PutUint64(start[12:20], 100)
+	for _, tc := range []struct {
+		name string
+		b    []byte
+		size int64
+	}{
+		{"shorter than the start record", make([]byte, 16), 16},
+		{"start record unread at the claimed size", make([]byte, 10), 40},
+		{"next header past the archive", start, int64(len(start))},
+	} {
+		if _, err := checkSevenZipLimits(bytes.NewReader(tc.b), tc.size, 0); !errors.Is(err, ErrMalformed) {
+			t.Fatalf("%s: got %v, want ErrMalformed", tc.name, err)
+		}
+	}
+}
+
+func TestSevenZipHeaderWalkRefusesMalformedShapes(t *testing.T) {
+	t.Parallel()
+	streams := sevenZipOneByteStreams
+	for _, tc := range []struct {
+		name string
+		hdr  []byte
+	}{
+		{"empty header", nil},
+		{"unknown signature id", []byte{0x99}},
+		{"main header ends in the first id", []byte{0x01}},
+		{"unknown main id", []byte{0x01, 0x99}},
+		{"archive properties truncated", []byte{0x01, 0x02}},
+		{"archive property size truncated", []byte{0x01, 0x02, 0x01, 0x80}},
+		{"archive property past the skip cap", []byte{0x01, 0x02, 0x01, 0xE1, 0x01, 0x00, 0x00}},
+		{"archive property body truncated", []byte{0x01, 0x02, 0x01, 0x05, 0x00}},
+		{"streams truncated", []byte{0x01, 0x04}},
+		{"streams unknown id", []byte{0x01, 0x04, 0x99}},
+		{"pack position truncated", []byte{0x01, 0x04, 0x06}},
+		{"pack count truncated", []byte{0x01, 0x04, 0x06, 0x00}},
+		{"pack size truncated", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x09}},
+		{"pack unknown attribute", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x99}},
+		{"pack digest id truncated", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x0A}},
+		{"pack digest defined but short", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x0A, 0x01, 0x00}},
+		{"pack digest bitmap truncated", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x0A, 0x00}},
+		{"pack digest sparse but short", []byte{0x01, 0x04, 0x06, 0x00, 0x01, 0x0A, 0x00, 0x01}},
+		{"unpack info truncated", append(append([]byte{0x01, 0x04}, streams[:6]...), 0x07)},
+		{"unpack folder marker missing", append(append([]byte{0x01, 0x04}, streams[:6]...), 0x07, 0x00)},
+		{"zero folders", append(append([]byte{0x01, 0x04}, streams[:6]...), 0x07, 0x0B, 0x00)},
+		{"external folder data", append(append([]byte{0x01, 0x04}, streams[:6]...), 0x07, 0x0B, 0x01, 0x01)},
+		{"unpack sizes truncated", append(append([]byte{0x01, 0x04}, streams...), 0x0C)},
+		{"unpack unknown attribute", append(append([]byte{0x01, 0x04}, streams[:len(streams)-1]...), 0x99)},
+		{"substreams truncated", append(append([]byte{0x01, 0x04}, streams...), 0x08)},
+		{"substreams unknown id", append(append([]byte{0x01, 0x04}, streams...), 0x08, 0x99)},
+		{"substream count of zero", append(append([]byte{0x01, 0x04}, streams...), 0x08, 0x0D, 0x00)},
+		{"substream sizes truncated", append(append([]byte{0x01, 0x04}, streams...), 0x08, 0x0D, 0x02, 0x09)},
+		{"substream digest truncated", append(append([]byte{0x01, 0x04}, streams...), 0x08, 0x0A)},
+		{"substreams without a streams terminator", append(append([]byte{0x01, 0x04}, streams...), 0x08, 0x00, 0x99)},
+		{"encoded header with a broken streams info", []byte{0x17, 0x99}},
+	} {
+		b := sevenZipWith(tc.hdr, []byte("x"))
+		if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0); !errors.Is(err, ErrMalformed) {
+			t.Fatalf("%s: got %v, want ErrMalformed", tc.name, err)
+		}
+	}
+}
+
+// A defined-bit map names which packed streams carry a digest, so an unset bit
+// must skip the four CRC bytes rather than consume the next stream's.
+func TestSevenZipPackDigestBitmapSkipsUndefinedStreams(t *testing.T) {
+	t.Parallel()
+	hdr := []byte{0x01, 0x04, 0x06, 0x00, 0x02, 0x09, 0x01, 0x01, 0x0A, 0x00, 0x02, 0x11, 0x22, 0x33, 0x44, 0x00}
+	hdr = append(hdr, 0x07, 0x0B, 0x01, 0x00, 0x01, 0x01, 0x00, 0x0C, 0x02, 0x00, 0x00, 0x00)
+	b := sevenZipWith(hdr, []byte("xy"))
+	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSevenZipFolderRejectsImpossibleStreamBindings(t *testing.T) {
+	t.Parallel()
+	folder := func(b []byte) error {
+		_, err := parseSevenZipFolder(&sevenZipCursor{r: bytes.NewReader(b)})
+		return err
+	}
+	for _, tc := range []struct {
+		name string
+		b    []byte
+	}{
+		{"zero method size", []byte{0x01, 0x00}},
+		{"method bytes truncated", []byte{0x01, 0x03}},
+		{"stream counts truncated", []byte{0x01, 0x11, 0x00}},
+		{"output count truncated", []byte{0x01, 0x11, 0x00, 0x01}},
+		{"zero input streams", []byte{0x01, 0x11, 0x00, 0x00, 0x01}},
+		{"more streams than a folder may hold", []byte{0x01, 0x11, 0x00, 0x41, 0x01}},
+		{"bind pair truncated", []byte{0x01, 0x11, 0x00, 0x01, 0x02}},
+		{"bind pair second index truncated", []byte{0x01, 0x11, 0x00, 0x01, 0x02, 0x00}},
+		{"fewer inputs than bind pairs", []byte{0x01, 0x11, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00}},
+		{"no packed stream", []byte{0x01, 0x11, 0x00, 0x01, 0x02, 0x00, 0x00}},
+		{"packed stream index truncated", []byte{0x01, 0x11, 0x00, 0x02, 0x01}},
+		{"coder properties truncated", []byte{0x01, 0x21, 0x00, 0x80}},
+		{"coder properties body truncated", []byte{0x01, 0x21, 0x00, 0x05}},
+		{"coder properties longer than a skip of empty", []byte{0x01, 0x21, 0x00, 0x09, 0x00}},
+		{"zero coders", []byte{0x00}},
+	} {
+		if err := folder(tc.b); !errors.Is(err, ErrMalformed) {
+			t.Fatalf("%s: got %v, want ErrMalformed", tc.name, err)
+		}
+	}
+	if err := folder([]byte{0x01, 0x01, 0x03}); err != nil {
+		t.Fatalf("a Delta filter alone: %v", err)
+	}
+	if err := folder([]byte{0x01, 0x11, 0x00, 0x02, 0x01, 0x00, 0x01}); err != nil {
+		t.Fatalf("two packed streams: %v", err)
+	}
+	if err := folder(append([]byte{0x01, 0x21, 0x00, 0x09}, make([]byte, 9)...)); err != nil {
+		t.Fatalf("Copy properties longer than eight: %v", err)
+	}
+	if _, err := checkSevenZipCoder([]byte{0x21}, 2, []byte{0, 0}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("LZMA2 with two property bytes: %v", err)
+	}
+	if _, err := checkSevenZipCoder([]byte{0x21}, 1, []byte{41}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("LZMA2 property 41: %v", err)
+	}
+	if _, err := checkSevenZipCoder([]byte{0x03, 0x01, 0x01}, 4, nil); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("LZMA with four property bytes: %v", err)
+	}
+	lzma200 := append([]byte{0x23, 0x03, 0x01, 0x01, 0x05, 0x5D}, binary.LittleEndian.AppendUint32(nil, 200<<20)...)
+	two := append([]byte{0x02}, lzma200...)
+	two = append(two, lzma200...)
+	two = append(two, 0x00, 0x00)
+	if err := folder(two); !errors.Is(err, ErrDecoderMemory) {
+		t.Fatalf("two 200 MiB dictionaries: %v, want ErrDecoderMemory", err)
+	}
+}
+
+func TestSevenZipEncodedHeaderMustDecodeWithAKnownCoder(t *testing.T) {
+	t.Parallel()
+	plain := []byte{0x01, 0x00}
+	for _, tc := range []struct {
+		name   string
+		method []byte
+		props  []byte
+		packed []byte
+		want   error
+	}{
+		{"AES", sevenZipAES, nil, plain, ErrEncrypted},
+		{"unknown method", []byte{0x04}, nil, plain, ErrMalformed},
+		{"Copy of a non-header", []byte{0x00}, nil, []byte{0x99}, ErrMalformed},
+		{"LZMA of garbage", []byte{0x03, 0x01, 0x01}, []byte{0x5D, 0x00, 0x00, 0x10, 0x00}, []byte("x"), ErrMalformed},
+		{"two packed sizes", []byte{0x00}, nil, plain, ErrMalformed},
+	} {
+		unpack := plain
+		if tc.name == "Copy of a non-header" {
+			unpack = tc.packed
+		}
+		b := encodeSevenZipWithCoder(unpack, tc.method, tc.props, tc.packed, tc.name == "two packed sizes")
+		_, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: got %v, want %v", tc.name, err, tc.want)
+		}
+	}
+
+	var lzmaBuf bytes.Buffer
+	w, err := lzma.WriterConfig{}.NewWriter(&lzmaBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lzmaBytes := lzmaBuf.Bytes()
+	b := encodeSevenZipWithCoder(plain, []byte{0x03, 0x01, 0x01}, lzmaBytes[:5], lzmaBytes[13:], false)
+	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0); err != nil {
+		t.Fatalf("LZMA-coded header: %v", err)
+	}
+
+	var lzma2 bytes.Buffer
+	w2, err := lzma.Writer2Config{DictCap: 1 << 20}.NewWriter2(&lzma2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w2.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b = encodeSevenZipWithCoder(plain, []byte{0x21}, []byte{16}, lzma2.Bytes(), false)
+	if _, err := checkSevenZipLimits(bytes.NewReader(b), int64(len(b)), 0); err != nil {
+		t.Fatalf("LZMA2-coded header: %v", err)
+	}
+}
+
+// encodeSevenZipWithCoder packs plain as an encoded 7z header using one coder.
+func encodeSevenZipWithCoder(plain, method, props, packed []byte, twoSizes bool) []byte {
+	enc := []byte{0x17, 0x06, 0x00}
+	if twoSizes {
+		enc = append(enc, 0x02, 0x09)
+		enc = append(enc, sevenZipNum(uint64(len(packed)))...)
+		enc = append(enc, sevenZipNum(1)...)
+	} else {
+		enc = append(enc, 0x01, 0x09)
+		enc = append(enc, sevenZipNum(uint64(len(packed)))...)
+	}
+	enc = append(enc, 0x00, 0x07, 0x0B, 0x01, 0x00, 0x01)
+	main := byte(len(method) & 0x0F)
+	if len(props) > 0 {
+		main |= 0x20
+	}
+	enc = append(enc, main)
+	enc = append(enc, method...)
+	if len(props) > 0 {
+		enc = append(enc, sevenZipNum(uint64(len(props)))...)
+		enc = append(enc, props...)
+	}
+	enc = append(enc, 0x0C)
+	enc = append(enc, sevenZipNum(uint64(len(plain)))...)
+	enc = append(enc, 0x00, 0x00)
+	return sevenZipWith(enc, packed)
 }
