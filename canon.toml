@@ -6,4 +6,5 @@ reconciled = "canon v0.1.0-poc"
 # production code keeps both.
 # internal/rardecode is nwaples/rardecode vendored to carry one patch, so it keeps
 # upstream's style rather than this repo's lint and format rules.
-"go-golangci-lint-00014" = ".golangci.yml excludes gosec G304 and G703 in _test.go files only, where the path is the test's own fixture, and lints and formats nothing under internal/rardecode"
+"go-golangci-lint-00014 paths:internal/rardecode" = ".golangci.yml excludes gosec G304 and G703 in _test.go files only, where the path is the test's own fixture, and lints and formats nothing under internal/rardecode"
+'go-golangci-lint-00014 rules:_test\.go$:gosec' = ".golangci.yml excludes gosec G304 and G703 in _test.go files only, where the path is the test's own fixture, and lints and formats nothing under internal/rardecode"
