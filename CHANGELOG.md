@@ -6,6 +6,15 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A v7 tar is no longer recognized as tar.
+- A zip with a decoy end record after the real one no longer skips the entry-count precheck.
+- A zip central directory over 1 KiB per allowed entry is refused, and the directory is bounded by the records read, not the end record's declared size.
+- A huge entry cap no longer wraps the stream budget negative, and tar header overhead is granted per header read, not per entry cap.
+- Path segments with invalid UTF-8 are rejected.
+- RAR: a corrupt PPM stream returns `ErrCorruptPPM` instead of panicking, a block header that fails to decode returns an error, and the PPM update search is bounded.
+
 ## [0.3.1] - 2026-11-12
 
 ### Fixed
