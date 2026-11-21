@@ -6,6 +6,8 @@ Notable changes to `go-archive`. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-21
+
 ### Fixed
 
 - A v7 tar is no longer recognized as tar.
@@ -96,7 +98,8 @@ Notable changes to `go-archive`. The format follows
 - `WindowsSegment` reports whether a path segment is a name Windows stores as written, and
   `Options.Segment` replaces it when the destination platform differs.
 
-[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Rethunk-Tech/go-archive/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Rethunk-Tech/go-archive/compare/v0.2.1...v0.2.2
