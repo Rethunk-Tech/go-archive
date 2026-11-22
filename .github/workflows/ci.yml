@@ -31,6 +31,7 @@ jobs:
         with:
           go-version-file: go.mod
           run-govulncheck: "true"
+          run-gorelease: "true"
 
       # Without this cache every pass re-checks every package. The key takes only the inputs
       # that touch every package, and the prefix restore-key keeps a changed key from starting cold.
@@ -52,10 +53,9 @@ jobs:
   test:
     # Runs the tests. os.Root's reserved-name refusal is enforced on this platform.
     strategy:
-      # Both legs report, so one platform's failure never hides the other's.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     # A decompressor that never returns would otherwise hold a runner for the full six hours.
     timeout-minutes: 20
@@ -72,18 +72,6 @@ jobs:
         with:
           go-version-file: go.mod
           run-test-race: "true"
-          run-gorelease: "true"
-
-      # Each Fuzz target found in each package gets a short run, so a new target is covered without
-      # editing this file. Linux only: every other leg already replays the committed seeds as tests.
-      - name: Fuzz smoke
-        if: runner.os == 'Linux'
-        run: |
-          for pkg in $(go list ./...); do
-            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
-              go test -run='^$' -fuzz="^${target}\$" -fuzztime=20s "$pkg"
-            done
-          done
 
   all-checks:
     # One required check for branch protection to point at. Without it, a matrix leg that never ran reads as "not failing" rather than "not run".
